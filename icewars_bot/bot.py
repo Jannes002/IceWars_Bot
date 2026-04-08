@@ -295,12 +295,18 @@ class BotLoop:
                 # Ersten Snapshot sofort speichern
                 self._record_to_db()
 
-            actions = self._strategy.decide(state)
-
-            # Task-State: Warteschlange aus dem Spiel + geplante Aktionen
+            # Task-State: Warteschlange aus dem Spiel aktualisieren (immer, auch pausiert)
             ts.update_game_queue(state.build_queue, state.active_research)
-            ts.update_planned([_action_to_task(a) for a in actions])
             ts.tick(self._stats.turns_completed + 1)
+
+            # Wenn Bot pausiert: keine Entscheidungen treffen, nur protokollieren
+            if ts.is_paused():
+                logger.info("Bot pausiert — Runde %d übersprungen.", self._stats.turns_completed + 1)
+                self._stats.turns_completed += 1
+                return
+
+            actions = self._strategy.decide(state)
+            ts.update_planned([_action_to_task(a) for a in actions])
 
             for action in actions:
                 task = _action_to_task(action)

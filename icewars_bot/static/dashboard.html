@@ -246,6 +246,9 @@
         .bot-status-idle     { background: #1e2130; color: var(--text-dim); }
         .bot-status-error    { background: #3a1a1a; color: var(--danger); }
         .bot-status-stopped  { background: #1e2130; color: var(--text-dim); }
+        .bot-status-paused   { background: #2a2010; color: #f0a020; }
+        #pause-btn.is-paused { background: #f0a020; color: #000; border-color: #f0a020; }
+        #pause-btn.is-running { background: var(--bg); color: var(--danger); border-color: var(--danger); }
 
         @media (max-width: 900px) { #task-panel { grid-template-columns: 1fr !important; } }
 
@@ -336,7 +339,13 @@
         <div class="chart-card" style="padding:14px;">
             <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
                 <h3 style="margin:0;">Bot-Aufgaben</h3>
-                <span id="bot-status-badge" style="font-size:0.78rem; padding:2px 10px; border-radius:20px; font-weight:600;">-</span>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span id="bot-status-badge" style="font-size:0.78rem; padding:2px 10px; border-radius:20px; font-weight:600;">-</span>
+                    <button id="pause-btn" onclick="togglePause()"
+                        style="font-size:0.78rem; padding:3px 12px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); cursor:pointer; font-weight:600; min-width:80px;">
+                        …
+                    </button>
+                </div>
             </div>
             <div id="task-current" style="margin-bottom:10px;"></div>
             <div id="task-todo"></div>
@@ -1098,16 +1107,40 @@ async function loadTasks() {
     }
 }
 
+async function togglePause() {
+    const btn = document.getElementById('pause-btn');
+    const isPaused = btn.classList.contains('is-paused');
+    const endpoint = isPaused ? '/api/resume' : '/api/pause';
+    try {
+        await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        await loadTasks();  // sofort aktualisieren
+    } catch (e) {
+        console.error('Pause/Resume fehlgeschlagen:', e);
+    }
+}
+
 function renderTaskPanel(data) {
     // Bot-Status Badge
     const badge = document.getElementById('bot-status-badge');
     const statusLabels = {
-        running: '● Läuft', starting: '◌ Startet',
+        running: '● Läuft', starting: '◌ Startet', paused: '⏸ Pausiert',
         idle: '○ Wartet', error: '✖ Fehler', stopped: '■ Gestoppt',
     };
     badge.textContent = statusLabels[data.bot_status] || data.bot_status;
     badge.className = `bot-status-${data.bot_status}`;
     badge.style.cssText = '';  // reset inline styles
+
+    // Pause-Button aktualisieren
+    const btn = document.getElementById('pause-btn');
+    if (data.paused) {
+        btn.textContent = '▶ Fortsetzen';
+        btn.classList.add('is-paused');
+        btn.classList.remove('is-running');
+    } else {
+        btn.textContent = '⏸ Pausieren';
+        btn.classList.remove('is-paused');
+        btn.classList.add('is-running');
+    }
 
     // Aktuelle Aufgabe
     const currentDiv = document.getElementById('task-current');

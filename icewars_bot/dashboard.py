@@ -68,6 +68,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json_response(updated)
             elif parsed.path == "/api/goals/reset":
                 self._json_response(G.reset())
+            elif parsed.path == "/api/pause":
+                ts.set_paused(True)
+                logger.info("Bot pausiert via Dashboard.")
+                self._json_response({"paused": True})
+            elif parsed.path == "/api/resume":
+                ts.set_paused(False)
+                logger.info("Bot fortgesetzt via Dashboard.")
+                self._json_response({"paused": False})
             else:
                 self.send_error(404, "Not Found")
         except Exception as e:

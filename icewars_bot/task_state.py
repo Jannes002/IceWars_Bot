@@ -44,14 +44,16 @@ class BotTaskState:
     game_queue: list[QueueEntry] = field(default_factory=list)
 
     # Bot-Status
-    bot_status: str = "starting"   # starting | running | idle | error | stopped
+    bot_status: str = "starting"   # starting | running | idle | error | stopped | paused
     last_turn_at: Optional[float] = None   # Unix-Timestamp der letzten Runde
     turn_number: int = 0
     last_error: str = ""
+    paused: bool = False
 
     def to_dict(self) -> dict:
         return {
             "bot_status": self.bot_status,
+            "paused": self.paused,
             "last_turn_at": self.last_turn_at,
             "turn_number": self.turn_number,
             "last_error": self.last_error,
@@ -153,5 +155,17 @@ def tick(turn_number: int) -> None:
     with _lock:
         _state.last_turn_at = time.time()
         _state.turn_number = turn_number
-        _state.bot_status = "running"
+        if not _state.paused:
+            _state.bot_status = "running"
         _state.last_error = ""
+
+
+def is_paused() -> bool:
+    with _lock:
+        return _state.paused
+
+
+def set_paused(paused: bool) -> None:
+    with _lock:
+        _state.paused = paused
+        _state.bot_status = "paused" if paused else "running"
