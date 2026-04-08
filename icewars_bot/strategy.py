@@ -7,6 +7,7 @@ from typing import Any, Optional
 from .config import Config
 from .state import Capacity, GameState, ResearchItem
 from . import goals as G
+from . import cooldown
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +275,13 @@ class Strategy:
             if btype in queued_types:
                 logger.debug("'%s' schon im Bau — überspringe.", bname)
                 continue
+            if cooldown.is_on_cooldown(btype):
+                rem = cooldown.remaining_seconds(btype) // 60
+                logger.info(
+                    "'%s' auf Cooldown (noch %d min) — überspringe, suche Alternative.",
+                    bname, rem,
+                )
+                continue
 
             logger.warning(
                 "Negative Tendenz: %s = %+.1f/h → baue '%s' für positiven Trend.",
@@ -308,6 +316,12 @@ class Strategy:
             if any(q.building_type == btype for q in state.build_queue):
                 continue
 
+            # Cooldown nach wiederholten Fehlversuchen
+            if cooldown.is_on_cooldown(btype):
+                rem = cooldown.remaining_seconds(btype) // 60
+                logger.info("'%s' auf Cooldown (noch %d min) — überspringe.", bname, rem)
+                continue
+
             logger.info(
                 "Baue Zufriedenheits-Gebäude: '%s' (+%.0f%%) — %s",
                 bname, bonus, reason,
@@ -336,6 +350,11 @@ class Strategy:
 
         for btype, bname, pop_add in HOUSING_BUILDINGS:
             if any(q.building_type == btype for q in state.build_queue):
+                continue
+
+            if cooldown.is_on_cooldown(btype):
+                rem = cooldown.remaining_seconds(btype) // 60
+                logger.info("'%s' auf Cooldown (noch %d min) — überspringe.", bname, rem)
                 continue
 
             logger.info(
@@ -367,6 +386,12 @@ class Strategy:
 
         for resource, (btype, bname) in STORAGE_BUILDINGS.items():
             if btype in queued_types or btype in seen_btypes:
+                continue
+            if cooldown.is_on_cooldown(btype):
+                rem = cooldown.remaining_seconds(btype) // 60
+                logger.debug(
+                    "Lager '%s' auf Cooldown (noch %d min) — überspringe.", bname, rem,
+                )
                 continue
             ratio = state.capacity.fill_ratio(resource, state.resources)
             if ratio >= G.storage_threshold():

@@ -18,6 +18,7 @@ from .scraper import GameScraper
 from .state import GameState, Resources, parse_state
 from .strategy import Action, Strategy, building_display_name
 from . import task_state as ts
+from . import cooldown
 
 logger = logging.getLogger(__name__)
 
@@ -313,13 +314,23 @@ class BotLoop:
                 ts.set_running(task)
                 success = await self._executor.execute(action)
                 ts.set_done(task, success)
+
+                # Cooldown-Tracking für gebäudespezifische Aktionen
+                btype = action.params.get("building_type", "") if action.type in (
+                    "build_specific", "build_storage"
+                ) else ""
+
                 if success:
                     self._stats.actions_executed += 1
                     # Bau- und Forschungsstarts in der DB festhalten
                     self._record_action_event(action)
+                    if btype:
+                        cooldown.record_success(btype)
                 else:
                     self._stats.actions_failed += 1
                     logger.warning("Aktion fehlgeschlagen: %s", action)
+                    if btype:
+                        cooldown.record_failure(btype, reason=action.params.get("reason", ""))
                 await asyncio.sleep(self._config.bot.action_delay_ms / 1000)
 
             self._stats.turns_completed += 1
