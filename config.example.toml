@@ -1,0 +1,17 @@
+[auth]
+username = "dein_benutzername"
+password = "dein_passwort"
+game_url  = "https://www.icewars.de"
+
+[browser]
+headless    = true
+slow_mo_ms  = 0          # auf >0 setzen um den Bot zuzuschauen
+viewport    = { width = 1280, height = 900 }
+
+[bot]
+turn_delay_s    = 5      # Wartezeit zwischen Runden
+action_delay_ms = 400    # Wartezeit zwischen Aktionen innerhalb einer Runde
+max_retries     = 3      # Fehlversuche bevor Browser neu gestartet wird
+
+[strategy]
+aggression = "balanced"  # "defensive", "balanced", "aggressive"

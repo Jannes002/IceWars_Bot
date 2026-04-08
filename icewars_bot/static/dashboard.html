@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Icewars Bot Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --bg-card: #1a1d27;
+            --bg-card-hover: #22263a;
+            --border: #2a2e3f;
+            --text: #e0e0e0;
+            --text-dim: #888;
+            --accent: #4fc3f7;
+            --accent2: #81c784;
+            --accent3: #ffb74d;
+            --danger: #ef5350;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+        header {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        header h1 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: var(--accent);
+        }
+        .controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .controls label { color: var(--text-dim); font-size: 0.85rem; }
+        .controls input, .controls select, .controls button {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+        }
+        .controls button {
+            background: var(--accent);
+            color: #000;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+        }
+        .controls button:hover { opacity: 0.85; }
+        .controls button.secondary {
+            background: var(--bg-card);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .quick-btns { display: flex; gap: 4px; }
+        .quick-btns button {
+            padding: 4px 10px;
+            font-size: 0.78rem;
+            background: var(--bg-card);
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+        }
+        .quick-btns button.active, .quick-btns button:hover {
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+
+        /* Generic filter buttons */
+        .btn {
+            padding: 4px 12px;
+            font-size: 0.78rem;
+            background: var(--bg-card);
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .btn:hover { color: var(--accent); border-color: var(--accent); }
+        .btn.btn-active { color: var(--accent); border-color: var(--accent); background: rgba(0,212,255,0.08); }
+
+        /* Status Bar */
+        .status-bar {
+            display: flex;
+            gap: 16px;
+            padding: 10px 24px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            font-size: 0.82rem;
+            flex-wrap: wrap;
+        }
+        .status-item { color: var(--text-dim); }
+        .status-item span { color: var(--text); font-weight: 500; }
+        .status-item .live { color: var(--accent2); }
+        .status-item .offline { color: var(--danger); }
+
+        /* KPI Cards */
+        .kpi-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+            padding: 16px 24px;
+        }
+        .kpi-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+        .kpi-card .label { font-size: 0.75rem; color: var(--text-dim); text-transform: uppercase; }
+        .kpi-card .value { font-size: 1.4rem; font-weight: 700; margin-top: 4px; }
+        .kpi-card .delta { font-size: 0.78rem; margin-top: 2px; }
+        .delta.pos { color: var(--accent2); }
+        .delta.neg { color: var(--danger); }
+        .delta.neutral { color: var(--text-dim); }
+
+        /* Charts */
+        .charts-container {
+            padding: 16px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .chart-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+        }
+        .chart-card h3 {
+            font-size: 0.95rem;
+            font-weight: 500;
+            margin-bottom: 12px;
+            color: var(--text-dim);
+        }
+        .chart-wrapper {
+            position: relative;
+            height: 280px;
+        }
+        .chart-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        @media (max-width: 900px) { .chart-row { grid-template-columns: 1fr; } }
+
+        /* Session bands */
+        .session-legend {
+            display: flex;
+            gap: 12px;
+            padding: 0 24px 8px;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+        .session-legend .dot {
+            display: inline-block;
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            margin-right: 4px;
+            vertical-align: middle;
+        }
+        .dot.active { background: rgba(79, 195, 247, 0.25); }
+        .dot.inactive { background: rgba(239, 83, 80, 0.15); }
+
+        .loading {
+            text-align: center;
+            padding: 60px;
+            color: var(--text-dim);
+            font-size: 1.1rem;
+        }
+
+        /* Goals panel */
+        .goals-group { background: var(--bg); border: 1px solid var(--border); border-radius:8px; padding:12px; }
+        .goals-group h4 { font-size:0.8rem; text-transform:uppercase; color:var(--text-dim); margin-bottom:10px; letter-spacing:.05em; }
+        .goal-row { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+        .goal-row:last-child { margin-bottom:0; }
+        .goal-row label { font-size:0.83rem; color:var(--text); flex:1; }
+        .goal-row .unit { font-size:0.75rem; color:var(--text-dim); min-width:28px; text-align:right; }
+        .goal-input {
+            width:90px; background:var(--bg-card); border:1px solid var(--border);
+            color:var(--text); padding:4px 8px; border-radius:5px; font-size:0.85rem;
+            text-align:right;
+        }
+        .goal-input:focus { outline:none; border-color:var(--accent); }
+        details > summary { list-style: none; }
+        details > summary::-webkit-details-marker { display: none; }
+        details[open] summary span:first-child { transform:rotate(90deg); display:inline-block; }
+
+        /* Task panel */
+        .task-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 7px 0;
+            border-bottom: 1px solid #1e2130;
+            font-size: 0.85rem;
+        }
+        .task-item:last-child { border-bottom: none; }
+        .task-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+        .task-label { font-weight: 500; }
+        .task-reason { color: var(--text-dim); font-size: 0.78rem; margin-top: 2px; }
+        .task-status-running { color: var(--accent); }
+        .task-status-done    { color: var(--accent2); }
+        .task-status-failed  { color: var(--danger); }
+        .task-status-pending { color: var(--text-dim); }
+
+        .queue-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 7px 0;
+            border-bottom: 1px solid #1e2130;
+            font-size: 0.85rem;
+        }
+        .queue-item:last-child { border-bottom: none; }
+        .queue-badge {
+            font-size: 0.72rem;
+            padding: 2px 7px;
+            border-radius: 10px;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+        .queue-badge.build    { background: #1e3a5f; color: var(--accent); }
+        .queue-badge.research { background: #2d1e4f; color: #ce93d8; }
+        .queue-finish { color: var(--text-dim); font-size: 0.78rem; margin-left: auto; }
+
+        .bot-status-running  { background: #1a3a1a; color: var(--accent2); }
+        .bot-status-starting { background: #2a2a1a; color: var(--accent3); }
+        .bot-status-idle     { background: #1e2130; color: var(--text-dim); }
+        .bot-status-error    { background: #3a1a1a; color: var(--danger); }
+        .bot-status-stopped  { background: #1e2130; color: var(--text-dim); }
+
+        @media (max-width: 900px) { #task-panel { grid-template-columns: 1fr !important; } }
+
+        /* Highscore tables */
+        .hs-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+        .hs-table caption { text-align: left; font-weight: 600; padding: 4px 0 8px; color: var(--accent); font-size: 0.9rem; }
+        .hs-table th { text-align: left; padding: 4px 8px; color: var(--text-dim); border-bottom: 1px solid var(--border); font-weight: 500; }
+        .hs-table td { padding: 4px 8px; border-bottom: 1px solid #1e2130; }
+        .hs-table tr.me { background: rgba(79, 195, 247, 0.1); }
+        .hs-table tr.me td { color: var(--accent); font-weight: 600; }
+        .hs-table .rank { color: var(--text-dim); width: 30px; }
+        .hs-table .alliance { color: var(--accent3); font-size: 0.78rem; }
+        .hs-table .val { text-align: right; font-variant-numeric: tabular-nums; }
+        @media (max-width: 900px) { #hs-tables { grid-template-columns: 1fr !important; } }
+
+        /* Auto-refresh indicator */
+        .auto-refresh {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .auto-refresh .indicator {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--accent2);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Icewars Bot Dashboard</h1>
+        <div class="controls">
+            <div class="quick-btns">
+                <button onclick="setRange('1h')" id="btn-1h">1h</button>
+                <button onclick="setRange('6h')" id="btn-6h">6h</button>
+                <button onclick="setRange('24h')" id="btn-24h" class="active">24h</button>
+                <button onclick="setRange('7d')" id="btn-7d">7d</button>
+                <button onclick="setRange('30d')" id="btn-30d">30d</button>
+                <button onclick="setRange('all')" id="btn-all">Alle</button>
+            </div>
+            <label>Von:</label>
+            <input type="datetime-local" id="dt-from">
+            <label>Bis:</label>
+            <input type="datetime-local" id="dt-to">
+            <button onclick="loadData()">Laden</button>
+            <div class="auto-refresh">
+                <div class="indicator" id="refresh-dot"></div>
+                <label>
+                    <input type="checkbox" id="auto-refresh" checked onchange="toggleAutoRefresh()">
+                    Auto (60s)
+                </label>
+            </div>
+        </div>
+    </header>
+
+    <div class="status-bar" id="status-bar">
+        <div class="status-item">Snapshots: <span id="stat-count">-</span></div>
+        <div class="status-item">Letzter: <span id="stat-latest">-</span></div>
+        <div class="status-item">DB: <span id="stat-db">-</span></div>
+    </div>
+
+    <!-- ── Goals / Einstellungen ──────────────────────────────────────────── -->
+    <details id="goals-panel" style="margin:0; background:var(--bg-card); border-bottom:1px solid var(--border);">
+        <summary style="padding:10px 24px; cursor:pointer; font-size:0.9rem; color:var(--accent); user-select:none; list-style:none; display:flex; align-items:center; gap:8px;">
+            <span>⚙</span> <span>Zielwerte (Soll) — Bot-Einstellungen</span>
+            <span style="margin-left:auto; color:var(--text-dim); font-size:0.8rem;" id="goals-saved-hint"></span>
+        </summary>
+        <div style="padding:0 24px 20px;">
+            <div id="goals-form" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px; margin-top:14px;">
+                <!-- wird per JS befüllt -->
+            </div>
+            <div style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap;">
+                <button onclick="saveGoals()" style="background:var(--accent); color:#000; border:none; padding:7px 20px; border-radius:6px; font-weight:600; cursor:pointer;">Speichern</button>
+                <button onclick="resetGoals()" style="background:var(--bg); color:var(--text-dim); border:1px solid var(--border); padding:7px 20px; border-radius:6px; cursor:pointer;">Zurücksetzen</button>
+            </div>
+        </div>
+    </details>
+
+    <!-- ── Task Panel ─────────────────────────────────────────────────────── -->
+    <div id="task-panel" style="display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:10px 24px;">
+
+        <!-- Aktuelle Aktion + geplante ToDos -->
+        <div class="chart-card" style="padding:14px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                <h3 style="margin:0;">Bot-Aufgaben</h3>
+                <span id="bot-status-badge" style="font-size:0.78rem; padding:2px 10px; border-radius:20px; font-weight:600;">-</span>
+            </div>
+            <div id="task-current" style="margin-bottom:10px;"></div>
+            <div id="task-todo"></div>
+        </div>
+
+        <!-- In-Game Warteschlange -->
+        <div class="chart-card" style="padding:14px;">
+            <h3 style="margin-bottom:10px;">In-Game Warteschlange</h3>
+            <div id="task-game-queue"></div>
+        </div>
+
+    </div>
+
+    <!-- Bau- & Forschungshistorie -->
+    <div class="chart-card" style="margin:18px 0; padding:16px;">
+        <h3 style="margin-bottom:12px;">Bau- &amp; Forschungshistorie</h3>
+        <div style="display:flex; gap:10px; margin-bottom:10px;">
+            <button id="build-filter-all" class="btn btn-active" onclick="setBuildFilter('all')">Alle</button>
+            <button id="build-filter-build" class="btn" onclick="setBuildFilter('build')">Bauten</button>
+            <button id="build-filter-research" class="btn" onclick="setBuildFilter('research')">Forschung</button>
+        </div>
+        <div id="build-events-list" style="max-height:320px; overflow-y:auto;"></div>
+    </div>
+
+    <div class="kpi-row" id="kpi-row"></div>
+
+    <div class="session-legend">
+        <span><span class="dot active"></span> Bot aktiv</span>
+        <span><span class="dot inactive"></span> Bot inaktiv</span>
+    </div>
+
+    <div class="charts-container">
+        <!-- Combined resource chart -->
+        <div class="chart-card">
+            <h3>Alle Ressourcen (kombiniert)</h3>
+            <div class="chart-wrapper"><canvas id="chart-combined"></canvas></div>
+        </div>
+
+        <!-- Individual charts in rows -->
+        <div class="chart-row">
+            <div class="chart-card">
+                <h3>Eisen</h3>
+                <div class="chart-wrapper"><canvas id="chart-iron"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>Stahl</h3>
+                <div class="chart-wrapper"><canvas id="chart-steel"></canvas></div>
+            </div>
+        </div>
+        <div class="chart-row">
+            <div class="chart-card">
+                <h3>Chemikalien</h3>
+                <div class="chart-wrapper"><canvas id="chart-chemicals"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>VV4A</h3>
+                <div class="chart-wrapper"><canvas id="chart-vv4a"></canvas></div>
+            </div>
+        </div>
+        <div class="chart-row">
+            <div class="chart-card">
+                <h3>Eis</h3>
+                <div class="chart-wrapper"><canvas id="chart-ice"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>Wasser</h3>
+                <div class="chart-wrapper"><canvas id="chart-water"></canvas></div>
+            </div>
+        </div>
+        <div class="chart-row">
+            <div class="chart-card">
+                <h3>Energie</h3>
+                <div class="chart-wrapper"><canvas id="chart-energy"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>Credits</h3>
+                <div class="chart-wrapper"><canvas id="chart-credits"></canvas></div>
+            </div>
+        </div>
+        <div class="chart-row">
+            <div class="chart-card">
+                <h3>Forschungspunkte (FP)</h3>
+                <div class="chart-wrapper"><canvas id="chart-fp"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>Punkte</h3>
+                <div class="chart-wrapper"><canvas id="chart-points"></canvas></div>
+            </div>
+        </div>
+
+        <!-- Population & Economy -->
+        <div class="chart-row">
+            <div class="chart-card">
+                <h3>Bevoelkerung</h3>
+                <div class="chart-wrapper"><canvas id="chart-population"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>Zufriedenheit & Lebensbedingungen</h3>
+                <div class="chart-wrapper"><canvas id="chart-satisfaction"></canvas></div>
+            </div>
+        </div>
+
+        <!-- Rates -->
+        <div class="chart-card">
+            <h3>Produktionsraten (/h)</h3>
+            <div class="chart-wrapper"><canvas id="chart-rates"></canvas></div>
+        </div>
+
+        <!-- Capacity fill -->
+        <div class="chart-card">
+            <h3>Lagerfuellstand (%)</h3>
+            <div class="chart-wrapper"><canvas id="chart-fill"></canvas></div>
+        </div>
+
+        <!-- ═══ HIGHSCORE SECTION ═══ -->
+        <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:16px;">
+            <h2 style="color:var(--accent); font-size:1.2rem; margin-bottom:12px;">Highscore Board</h2>
+
+            <!-- Current standings table -->
+            <div class="chart-card" id="hs-tables-container">
+                <h3>Aktuelle Platzierungen</h3>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;" id="hs-tables">
+                    <div id="hs-table-points"></div>
+                    <div id="hs-table-economy"></div>
+                    <div id="hs-table-research"></div>
+                    <div id="hs-table-fleet"></div>
+                </div>
+            </div>
+
+            <!-- Rank over time charts -->
+            <div class="chart-row">
+                <div class="chart-card">
+                    <h3>Rang-Verlauf: Gesamtpunkte</h3>
+                    <div class="chart-wrapper"><canvas id="chart-hs-rank-points"></canvas></div>
+                </div>
+                <div class="chart-card">
+                    <h3>Rang-Verlauf: Wirtschaft</h3>
+                    <div class="chart-wrapper"><canvas id="chart-hs-rank-economy"></canvas></div>
+                </div>
+            </div>
+            <div class="chart-row">
+                <div class="chart-card">
+                    <h3>Rang-Verlauf: Forschung</h3>
+                    <div class="chart-wrapper"><canvas id="chart-hs-rank-research"></canvas></div>
+                </div>
+                <div class="chart-card">
+                    <h3>Rang-Verlauf: Flotte</h3>
+                    <div class="chart-wrapper"><canvas id="chart-hs-rank-fleet"></canvas></div>
+                </div>
+            </div>
+
+            <!-- Score value over time -->
+            <div class="chart-card">
+                <h3>Punkte-Verlauf aller Spieler</h3>
+                <div class="chart-wrapper" style="height:350px;"><canvas id="chart-hs-values"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let snapshots = [];
+let sessions = [];
+let hsData = {};   // { category: [entries...] }  — latest board
+let hsTimelines = {};  // { "user:cat": [{epoch,rank,value}...] }
+let charts = {};
+let autoRefreshTimer = null;
+let currentRange = '24h';
+const MY_USERNAME = 'admin12345';
+
+const HS_CATEGORIES = {
+    points:   'Gesamtpunkte',
+    economy:  'Wirtschaft',
+    research: 'Forschung',
+    fleet:    'Flotte',
+};
+
+// Player colors for highscore charts (consistent per username)
+const PLAYER_COLORS = [
+    '#4fc3f7','#81c784','#ffb74d','#ef5350','#ce93d8',
+    '#80deea','#fff176','#a5d6a7','#90caf9','#f48fb1',
+    '#b0bec5','#78909c','#c5e1a5','#ffe082','#80cbc4',
+    '#bcaaa4','#e6ee9c','#b39ddb','#9fa8da','#f0f4c3',
+];
+function playerColor(name) {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0x7fffffff;
+    return PLAYER_COLORS[h % PLAYER_COLORS.length];
+}
+
+// ── Colors ─────────────────────────────────────────────────────────────────
+const COLORS = {
+    iron:      '#b0bec5',
+    steel:     '#78909c',
+    chemicals: '#ce93d8',
+    ice:       '#80deea',
+    water:     '#4fc3f7',
+    energy:    '#fff176',
+    vv4a:      '#a5d6a7',
+    credits:   '#ffb74d',
+    fp:        '#90caf9',
+    points:    '#ef5350',
+};
+
+const LABELS = {
+    iron: 'Eisen', steel: 'Stahl', chemicals: 'Chemikalien',
+    ice: 'Eis', water: 'Wasser', energy: 'Energie',
+    vv4a: 'VV4A', credits: 'Credits', fp: 'FP', points: 'Punkte',
+};
+
+// ── Chart.js defaults ──────────────────────────────────────────────────────
+Chart.defaults.color = '#888';
+Chart.defaults.borderColor = '#2a2e3f';
+Chart.defaults.font.size = 11;
+
+// ── Data Loading ───────────────────────────────────────────────────────────
+async function loadData() {
+    const fromInput = document.getElementById('dt-from').value;
+    const toInput = document.getElementById('dt-to').value;
+
+    let url = '/api/snapshots?limit=50000';
+    if (fromInput) url += `&from=${new Date(fromInput).getTime() / 1000}`;
+    if (toInput) url += `&to=${new Date(toInput).getTime() / 1000}`;
+
+    try {
+        const [snapRes, sessRes, statsRes] = await Promise.all([
+            fetch(url), fetch('/api/sessions'), fetch('/api/stats')
+        ]);
+        snapshots = await snapRes.json();
+        sessions = await sessRes.json();
+        const stats = await statsRes.json();
+
+        document.getElementById('stat-count').textContent = stats.snapshot_count;
+        document.getElementById('stat-latest').textContent =
+            stats.latest_timestamp ? new Date(stats.latest_timestamp).toLocaleString('de-DE') : '-';
+        document.getElementById('stat-db').textContent = stats.db_path || '-';
+
+        updateKPIs();
+        updateAllCharts();
+        await Promise.all([loadHighscores(), loadTasks(), loadGoals(), loadBuildEvents()]);
+    } catch (e) {
+        console.error('Load error:', e);
+    }
+}
+
+async function loadHighscores() {
+    try {
+        // Load latest boards for all categories
+        const boards = await Promise.all(
+            Object.keys(HS_CATEGORIES).map(cat =>
+                fetch(`/api/highscore/latest?category=${cat}`).then(r => r.json()).then(d => [cat, d])
+            )
+        );
+        hsData = {};
+        boards.forEach(([cat, entries]) => { hsData[cat] = entries; });
+
+        // Collect all unique usernames from the latest points board
+        const allUsers = (hsData.points || []).map(e => e.username);
+
+        // Load timelines for all players in all categories
+        const fromInput = document.getElementById('dt-from').value;
+        const toInput = document.getElementById('dt-to').value;
+        let timeQS = '';
+        if (fromInput) timeQS += `&from=${new Date(fromInput).getTime() / 1000}`;
+        if (toInput) timeQS += `&to=${new Date(toInput).getTime() / 1000}`;
+
+        const tlPromises = [];
+        for (const user of allUsers) {
+            for (const cat of Object.keys(HS_CATEGORIES)) {
+                tlPromises.push(
+                    fetch(`/api/highscore/timeline?username=${encodeURIComponent(user)}&category=${cat}${timeQS}`)
+                        .then(r => r.json())
+                        .then(d => [`${user}:${cat}`, d])
+                );
+            }
+        }
+        const tls = await Promise.all(tlPromises);
+        hsTimelines = {};
+        tls.forEach(([key, data]) => { hsTimelines[key] = data; });
+
+        updateHighscoreTables();
+        updateHighscoreCharts();
+    } catch (e) {
+        console.error('Highscore load error:', e);
+    }
+}
+
+// ── Time Range ─────────────────────────────────────────────────────────────
+function setRange(range) {
+    currentRange = range;
+    document.querySelectorAll('.quick-btns button').forEach(b => b.classList.remove('active'));
+    document.getElementById('btn-' + range).classList.add('active');
+
+    const now = new Date();
+    const toStr = formatDTLocal(now);
+    document.getElementById('dt-to').value = toStr;
+
+    if (range === 'all') {
+        document.getElementById('dt-from').value = '';
+        document.getElementById('dt-to').value = '';
+    } else {
+        const ms = { '1h': 3600e3, '6h': 6*3600e3, '24h': 86400e3, '7d': 7*86400e3, '30d': 30*86400e3 };
+        document.getElementById('dt-from').value = formatDTLocal(new Date(now - ms[range]));
+    }
+    loadData();
+}
+
+function formatDTLocal(d) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+// ── KPI Cards ──────────────────────────────────────────────────────────────
+function updateKPIs() {
+    const row = document.getElementById('kpi-row');
+    if (!snapshots.length) { row.innerHTML = '<div class="loading">Keine Daten</div>'; return; }
+
+    const latest = snapshots[snapshots.length - 1];
+    const first = snapshots[0];
+
+    const rt = (currentGoals.resource_targets) || {};
+    const kpis = [
+        { label: 'Eisen',       key: 'iron',            goal: rt.iron },
+        { label: 'Stahl',       key: 'steel',           goal: rt.steel },
+        { label: 'Chemikalien', key: 'chemicals',       goal: rt.chemicals },
+        { label: 'VV4A',        key: 'vv4a',            goal: rt.vv4a },
+        { label: 'Eis',         key: 'ice',             goal: rt.ice },
+        { label: 'Wasser',      key: 'water',           goal: rt.water },
+        { label: 'Energie',     key: 'energy',          goal: rt.energy },
+        { label: 'Credits',     key: 'credits',         goal: rt.credits },
+        { label: 'FP',          key: 'fp',              goal: rt.fp },
+        { label: 'Punkte',      key: 'points' },
+        { label: 'Bev. frei',   key: 'population_free',
+          fmt: (v, snap) => {
+              const max = snap ? snap.population_max : 0;
+              return max > 0 ? `${formatNum(v)} (${(v/max*100).toFixed(0)}%)` : formatNum(v);
+          },
+          goal: currentGoals.pop_free_min,
+          goalFmt: v => (v*100).toFixed(0) + '% frei',
+          goalDynamic: snap => snap ? snap.population_max * (currentGoals.pop_free_min || 0.2) : 0,
+        },
+        { label: 'Bev. gesamt', key: 'population_total',
+          fmt: (v, snap) => {
+              const max = snap ? snap.population_max : 0;
+              return max > 0 ? `${formatNum(v)} / ${formatNum(max)}` : formatNum(v);
+          },
+        },
+        { label: 'Zufriedenh.', key: 'satisfaction',   fmt: v => (v * 100).toFixed(1) + '%',
+          goal: currentGoals.satisfaction_warn, goalScale: 100, goalFmt: v => (v*100).toFixed(0)+'%' },
+    ];
+
+    row.innerHTML = kpis.map(k => {
+        const val = latest[k.key] || 0;
+        const prev = first[k.key] || 0;
+        const delta = val - prev;
+        const display = k.fmt ? k.fmt(val, latest) : formatNum(val);
+
+        // Delta: für kombinierte Formate nur die Rohzahl anzeigen
+        const deltaStr = (delta >= 0 ? '+' : '') + formatNum(delta);
+        const cls = delta > 0 ? 'pos' : delta < 0 ? 'neg' : 'neutral';
+
+        // Ziel-Fortschrittsbalken
+        let goalBar = '';
+        const effectiveGoal = k.goalDynamic ? k.goalDynamic(latest) : (k.goal || 0);
+        if (effectiveGoal > 0) {
+            const rawVal = k.goalScale ? val * k.goalScale : val;
+            const goalVal = k.goalScale ? effectiveGoal * k.goalScale : effectiveGoal;
+            const pct = Math.min(100, (rawVal / goalVal) * 100);
+            const barColor = pct >= 100 ? 'var(--accent2)' : pct >= 60 ? 'var(--accent3)' : 'var(--danger)';
+            const goalDisplay = k.goalFmt ? k.goalFmt(k.goal || effectiveGoal) : formatNum(effectiveGoal);
+            goalBar = `
+                <div style="margin-top:5px;">
+                    <div style="background:var(--border); border-radius:3px; height:4px; overflow:hidden;">
+                        <div style="width:${pct}%; height:100%; background:${barColor}; border-radius:3px; transition:width .3s;"></div>
+                    </div>
+                    <div style="font-size:0.7rem; color:var(--text-dim); margin-top:2px;">Ziel: ${goalDisplay}</div>
+                </div>`;
+        }
+
+        return `<div class="kpi-card">
+            <div class="label">${k.label}</div>
+            <div class="value" style="color:${COLORS[k.key] || 'var(--text)'}">${display}</div>
+            <div class="delta ${cls}" title="Änderung seit Beginn des Zeitraums">${deltaStr}</div>
+            ${goalBar}
+        </div>`;
+    }).join('');
+}
+
+function formatNum(n) {
+    if (Math.abs(n) >= 1e6) return (n/1e6).toFixed(1) + 'M';
+    if (Math.abs(n) >= 1e3) return (n/1e3).toFixed(1) + 'K';
+    return n % 1 === 0 ? n.toLocaleString('de-DE') : n.toFixed(1);
+}
+
+// ── Session Bands (annotation boxes) ───────────────────────────────────────
+function sessionAnnotations() {
+    if (!sessions.length) return {};
+    const annotations = {};
+    sessions.forEach((s, i) => {
+        annotations['session' + i] = {
+            type: 'box',
+            xMin: s.start_epoch * 1000,
+            xMax: (s.end_epoch || Date.now() / 1000) * 1000,
+            backgroundColor: 'rgba(79, 195, 247, 0.06)',
+            borderColor: 'rgba(79, 195, 247, 0.2)',
+            borderWidth: 1,
+        };
+    });
+    return annotations;
+}
+
+// ── Chart Creation ─────────────────────────────────────────────────────────
+function makeTimeData(key) {
+    return snapshots.map(s => ({ x: s.epoch * 1000, y: s[key] || 0 }));
+}
+
+function baseChartConfig(datasets, yTitle) {
+    return {
+        type: 'line',
+        data: { datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', labels: { boxWidth: 12, padding: 8 } },
+                tooltip: {
+                    callbacks: {
+                        title: items => new Date(items[0].parsed.x).toLocaleString('de-DE'),
+                        label: item => `${item.dataset.label}: ${formatNum(item.parsed.y)}`
+                    }
+                },
+            },
+            scales: {
+                x: {
+                    type: 'time',
+                    time: { tooltipFormat: 'dd.MM.yyyy HH:mm', displayFormats: {
+                        minute: 'HH:mm', hour: 'HH:mm', day: 'dd.MM', week: 'dd.MM', month: 'MMM yy'
+                    }},
+                    grid: { color: '#1e2130' },
+                },
+                y: {
+                    title: { display: !!yTitle, text: yTitle || '' },
+                    grid: { color: '#1e2130' },
+                    beginAtZero: false,
+                },
+            },
+        },
+    };
+}
+
+function makeDataset(label, key, color, fill = false) {
+    return {
+        label,
+        data: makeTimeData(key),
+        borderColor: color,
+        backgroundColor: fill ? color + '20' : 'transparent',
+        fill,
+        pointRadius: 0,
+        pointHitRadius: 6,
+        borderWidth: 1.5,
+        tension: 0.3,
+    };
+}
+
+function createOrUpdate(canvasId, config) {
+    if (charts[canvasId]) {
+        charts[canvasId].data = config.data;
+        charts[canvasId].update('none');
+    } else {
+        charts[canvasId] = new Chart(document.getElementById(canvasId), config);
+    }
+}
+
+// ── Individual Resource Chart (with capacity band) ─────────────────────────
+function resourceChart(canvasId, key, label, color) {
+    const ds = [makeDataset(label, key, color, true)];
+
+    // Add capacity line if available
+    const capKey = key + '_cap';
+    if (snapshots.some(s => s[capKey] > 0)) {
+        ds.push({
+            label: 'Kapazitaet',
+            data: snapshots.map(s => ({ x: s.epoch * 1000, y: s[capKey] || 0 })),
+            borderColor: '#ef535080',
+            borderDash: [6, 3],
+            pointRadius: 0,
+            borderWidth: 1,
+            fill: false,
+        });
+    }
+
+    createOrUpdate(canvasId, baseChartConfig(ds, label));
+}
+
+// ── Update All Charts ──────────────────────────────────────────────────────
+function updateAllCharts() {
+    if (!snapshots.length) return;
+
+    // Combined resources
+    const combinedDS = ['iron','steel','chemicals','ice','water','energy','vv4a'].map(k =>
+        makeDataset(LABELS[k], k, COLORS[k])
+    );
+    createOrUpdate('chart-combined', baseChartConfig(combinedDS, 'Menge'));
+
+    // Individual resource charts
+    ['iron','steel','chemicals','vv4a','ice','water','energy','credits','fp'].forEach(k => {
+        resourceChart('chart-' + k, k, LABELS[k], COLORS[k]);
+    });
+
+    // Points
+    createOrUpdate('chart-points', baseChartConfig(
+        [makeDataset('Punkte', 'points', COLORS.points, true)], 'Punkte'
+    ));
+
+    // Population
+    createOrUpdate('chart-population', baseChartConfig([
+        makeDataset('Frei', 'population_free', '#4fc3f7', true),
+        makeDataset('Gesamt', 'population_total', '#81c784'),
+        makeDataset('Maximum', 'population_max', '#ef535080'),
+    ], 'Einwohner'));
+
+    // Satisfaction & living conditions
+    const satDS = [
+        {
+            label: 'Zufriedenheit (%)',
+            data: snapshots.map(s => ({ x: s.epoch * 1000, y: (s.satisfaction || 0) * 100 })),
+            borderColor: '#81c784',
+            backgroundColor: '#81c78420',
+            fill: true, pointRadius: 0, borderWidth: 1.5, tension: 0.3,
+        },
+        {
+            label: 'Lebensbedingungen (%)',
+            data: snapshots.map(s => ({ x: s.epoch * 1000, y: s.living_conditions || 0 })),
+            borderColor: '#ffb74d',
+            pointRadius: 0, borderWidth: 1.5, tension: 0.3, fill: false,
+        },
+        {
+            label: 'Umweltpunkte',
+            data: snapshots.map(s => ({ x: s.epoch * 1000, y: s.eco_points || 0 })),
+            borderColor: '#ce93d8',
+            pointRadius: 0, borderWidth: 1.5, tension: 0.3, fill: false,
+            yAxisID: 'y2',
+        },
+    ];
+    const satConfig = baseChartConfig(satDS, '%');
+    satConfig.options.scales.y2 = {
+        position: 'right',
+        title: { display: true, text: 'Umwelt' },
+        grid: { drawOnChartArea: false },
+    };
+    createOrUpdate('chart-satisfaction', satConfig);
+
+    // Rates
+    const rateKeys = ['iron','steel','chemicals','ice','water','energy','vv4a','credits','fp'];
+    const ratesDS = rateKeys.map(k => makeDataset(LABELS[k] + '/h', k + '_rate', COLORS[k]));
+    createOrUpdate('chart-rates', baseChartConfig(ratesDS, 'Rate /h'));
+
+    // Fill percentages
+    const fillDS = ['iron','steel','chemicals','ice','water','energy','vv4a'].map(k => ({
+        label: LABELS[k],
+        data: snapshots.map(s => {
+            const cap = s[k + '_cap'] || 0;
+            const val = s[k] || 0;
+            return { x: s.epoch * 1000, y: cap > 0 ? (val / cap * 100) : 0 };
+        }),
+        borderColor: COLORS[k],
+        pointRadius: 0,
+        borderWidth: 1.5,
+        tension: 0.3,
+        fill: false,
+    }));
+    // Add 80% threshold line
+    fillDS.push({
+        label: 'Schwelle (80%)',
+        data: snapshots.length ? [
+            { x: snapshots[0].epoch * 1000, y: 80 },
+            { x: snapshots[snapshots.length-1].epoch * 1000, y: 80 }
+        ] : [],
+        borderColor: '#ef535080',
+        borderDash: [6, 3],
+        pointRadius: 0,
+        borderWidth: 1,
+        fill: false,
+    });
+    const fillConfig = baseChartConfig(fillDS, 'Fuellstand %');
+    fillConfig.options.scales.y.min = 0;
+    fillConfig.options.scales.y.max = 105;
+    createOrUpdate('chart-fill', fillConfig);
+}
+
+// ── Auto-Refresh ───────────────────────────────────────────────────────────
+function toggleAutoRefresh() {
+    const checked = document.getElementById('auto-refresh').checked;
+    const dot = document.getElementById('refresh-dot');
+    if (checked) {
+        dot.style.background = 'var(--accent2)';
+        startAutoRefresh();
+    } else {
+        dot.style.background = 'var(--text-dim)';
+        stopAutoRefresh();
+    }
+}
+
+function startAutoRefresh() {
+    stopAutoRefresh();
+    autoRefreshTimer = setInterval(() => {
+        // Re-apply current range to shift window
+        if (currentRange !== 'all') {
+            setRange(currentRange);
+        } else {
+            loadData();
+        }
+    }, 60000);
+}
+
+function stopAutoRefresh() {
+    if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+}
+
+// ── Goals Panel ────────────────────────────────────────────────────────────
+let currentGoals = {};
+
+const GOAL_FIELDS = [
+    {
+        group: 'Zufriedenheit & Lebensbedingungen',
+        fields: [
+            { key: 'satisfaction_warn',     label: 'Zufriedenheit Warnschwelle',  unit: '%',  scale: 100, decimals: 0, tip: 'Unter diesem Wert baut der Bot Zufriedenheitsgebäude' },
+            { key: 'satisfaction_critical', label: 'Zufriedenheit Kritisch',       unit: '%',  scale: 100, decimals: 0, tip: 'Unter diesem Wert greift er sofort ein' },
+            { key: 'living_conditions_target', label: 'Lebensbedingungen Ziel',    unit: '%',  scale: 1,   decimals: 0, tip: 'Anzeige-Ziel im Dashboard' },
+        ]
+    },
+    {
+        group: 'Bevölkerung',
+        fields: [
+            { key: 'pop_free_min', label: 'Freie Bevölkerung Min.',  unit: '%', scale: 100, decimals: 0, tip: 'Unter diesem Anteil werden Wohngebäude gebaut' },
+            { key: 'pop_free_max', label: 'Freie Bevölkerung Max.',  unit: '%', scale: 100, decimals: 0, tip: 'Über diesem Anteil wird kein Wohnraum mehr gebaut' },
+        ]
+    },
+    {
+        group: 'Wirtschaft',
+        fields: [
+            { key: 'credits_warn_balance', label: 'Credits Mindestbestand', unit: 'Cr', scale: 1, decimals: 0, tip: 'Unter diesem Bestand bei neg. Rate: keine teuren Gebäude' },
+            { key: 'storage_threshold',    label: 'Lager-Schwelle',          unit: '%', scale: 100, decimals: 0, tip: 'Ab diesem Füllstand wird ein neues Lager gebaut' },
+        ]
+    },
+    {
+        group: 'Ressourcen-Ziele (Anzeige)',
+        fields: [
+            { key: 'resource_targets.iron',      label: 'Eisen',       unit: '', scale: 1, decimals: 0 },
+            { key: 'resource_targets.steel',     label: 'Stahl',       unit: '', scale: 1, decimals: 0 },
+            { key: 'resource_targets.chemicals', label: 'Chemikalien', unit: '', scale: 1, decimals: 0 },
+            { key: 'resource_targets.ice',       label: 'Eis',         unit: '', scale: 1, decimals: 0 },
+            { key: 'resource_targets.water',     label: 'Wasser',      unit: '', scale: 1, decimals: 0 },
+            { key: 'resource_targets.energy',    label: 'Energie',     unit: '', scale: 1, decimals: 0 },
+            { key: 'resource_targets.vv4a',      label: 'VV4A',        unit: '', scale: 1, decimals: 0 },
+            { key: 'resource_targets.credits',   label: 'Credits',     unit: '', scale: 1, decimals: 0 },
+            { key: 'resource_targets.fp',        label: 'FP',          unit: '', scale: 1, decimals: 0 },
+        ]
+    },
+];
+
+function getNestedValue(obj, key) {
+    const parts = key.split('.');
+    let v = obj;
+    for (const p of parts) v = (v || {})[p];
+    return v;
+}
+
+function renderGoalsForm(goals) {
+    currentGoals = goals;
+    const form = document.getElementById('goals-form');
+    form.innerHTML = GOAL_FIELDS.map(group => `
+        <div class="goals-group">
+            <h4>${group.group}</h4>
+            ${group.fields.map(f => {
+                const raw = getNestedValue(goals, f.key) ?? 0;
+                const display = (raw * f.scale).toFixed(f.decimals);
+                const tip = f.tip ? `title="${f.tip}"` : '';
+                return `<div class="goal-row" ${tip}>
+                    <label>${f.label}</label>
+                    <input class="goal-input" type="number" step="${f.decimals > 0 ? 0.1 : 1}"
+                        id="goal_${f.key.replace(/\./g,'_')}" value="${display}">
+                    <span class="unit">${f.unit}</span>
+                </div>`;
+            }).join('')}
+        </div>
+    `).join('');
+}
+
+async function loadGoals() {
+    try {
+        const goals = await fetch('/api/goals').then(r => r.json());
+        renderGoalsForm(goals);
+    } catch (e) { console.warn('Goals laden fehlgeschlagen:', e); }
+}
+
+function collectGoalsFromForm() {
+    const patch = { resource_targets: {} };
+    for (const group of GOAL_FIELDS) {
+        for (const f of group.fields) {
+            const inputId = 'goal_' + f.key.replace(/\./g, '_');
+            const el = document.getElementById(inputId);
+            if (!el) continue;
+            const displayVal = parseFloat(el.value) || 0;
+            const rawVal = displayVal / f.scale;
+            if (f.key.startsWith('resource_targets.')) {
+                const resKey = f.key.split('.')[1];
+                patch.resource_targets[resKey] = rawVal;
+            } else {
+                patch[f.key] = rawVal;
+            }
+        }
+    }
+    return patch;
+}
+
+async function saveGoals() {
+    const patch = collectGoalsFromForm();
+    try {
+        const updated = await fetch('/api/goals', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(patch),
+        }).then(r => r.json());
+        renderGoalsForm(updated);
+        const hint = document.getElementById('goals-saved-hint');
+        hint.textContent = '✓ Gespeichert ' + new Date().toLocaleTimeString('de-DE');
+        hint.style.color = 'var(--accent2)';
+        setTimeout(() => { hint.textContent = ''; }, 4000);
+        // KPI-Karten neu rendern damit Fortschrittsanzeigen aktualisiert werden
+        updateKPIs();
+    } catch (e) { alert('Fehler beim Speichern: ' + e); }
+}
+
+async function resetGoals() {
+    if (!confirm('Alle Zielwerte auf Standard zurücksetzen?')) return;
+    try {
+        const defaults = await fetch('/api/goals/reset', { method: 'POST' }).then(r => r.json());
+        renderGoalsForm(defaults);
+        document.getElementById('goals-saved-hint').textContent = '';
+    } catch (e) { alert('Fehler: ' + e); }
+}
+
+// ── Task Panel ─────────────────────────────────────────────────────────────
+const ACTION_ICONS = {
+    build_specific:      '🏗️',
+    build_storage:       '📦',
+    build_next_building: '🔨',
+    start_research:      '🔬',
+};
+
+async function loadTasks() {
+    try {
+        const data = await fetch('/api/tasks').then(r => r.json());
+        renderTaskPanel(data);
+    } catch (e) {
+        console.warn('Tasks nicht verfügbar:', e);
+    }
+}
+
+function renderTaskPanel(data) {
+    // Bot-Status Badge
+    const badge = document.getElementById('bot-status-badge');
+    const statusLabels = {
+        running: '● Läuft', starting: '◌ Startet',
+        idle: '○ Wartet', error: '✖ Fehler', stopped: '■ Gestoppt',
+    };
+    badge.textContent = statusLabels[data.bot_status] || data.bot_status;
+    badge.className = `bot-status-${data.bot_status}`;
+    badge.style.cssText = '';  // reset inline styles
+
+    // Aktuelle Aufgabe
+    const currentDiv = document.getElementById('task-current');
+    if (data.current) {
+        const t = data.current;
+        const icon = ACTION_ICONS[t.action_type] || '⚙️';
+        currentDiv.innerHTML = `
+            <div style="font-size:0.75rem; color:var(--text-dim); margin-bottom:4px;">AKTUELL</div>
+            <div class="task-item">
+                <span class="task-icon task-status-running">${icon}</span>
+                <div>
+                    <div class="task-label task-status-running">${t.label}</div>
+                    ${t.reason ? `<div class="task-reason">${t.reason}</div>` : ''}
+                </div>
+                <span style="margin-left:auto; font-size:0.75rem;" class="task-status-running">⟳ läuft</span>
+            </div>`;
+    } else {
+        const age = data.last_turn_at ? Math.round((Date.now()/1000 - data.last_turn_at)) : null;
+        const ageStr = age !== null ? ` (vor ${age}s)` : '';
+        currentDiv.innerHTML = `<div style="color:var(--text-dim); font-size:0.82rem; padding:4px 0;">
+            Runde #${data.turn_number || 0}${ageStr} — keine Aktion aktiv</div>`;
+    }
+
+    // ToDo-Liste
+    const todoDiv = document.getElementById('task-todo');
+    const todos = data.planned || [];
+    if (!todos.length) {
+        todoDiv.innerHTML = '<div style="color:var(--text-dim); font-size:0.82rem;">Keine geplanten Aufgaben.</div>';
+    } else {
+        const statusIcon = { pending:'○', running:'⟳', done:'✓', failed:'✖' };
+        const statusCls  = { pending:'pending', running:'running', done:'done', failed:'failed' };
+        todoDiv.innerHTML = `
+            <div style="font-size:0.75rem; color:var(--text-dim); margin-bottom:4px;">GEPLANT DIESE RUNDE</div>
+            ${todos.map(t => {
+                const icon = ACTION_ICONS[t.action_type] || '⚙️';
+                const si = statusIcon[t.status] || '○';
+                const sc = statusCls[t.status] || 'pending';
+                return `<div class="task-item">
+                    <span class="task-icon">${icon}</span>
+                    <div style="flex:1">
+                        <div class="task-label">${t.label}</div>
+                        ${t.reason ? `<div class="task-reason">${t.reason}</div>` : ''}
+                    </div>
+                    <span class="task-status-${sc}" style="font-size:0.82rem;">${si}</span>
+                </div>`;
+            }).join('')}`;
+    }
+
+    // In-Game Warteschlange
+    const queueDiv = document.getElementById('task-game-queue');
+    const queue = data.game_queue || [];
+    if (!queue.length) {
+        queueDiv.innerHTML = '<div style="color:var(--text-dim); font-size:0.82rem;">Warteschlange leer.</div>';
+    } else {
+        queueDiv.innerHTML = queue.map(q => {
+            let finishStr = '';
+            if (q.finish_time) {
+                finishStr = 'fertig ~' + new Date(q.finish_time).toLocaleString('de-DE', {hour:'2-digit', minute:'2-digit'});
+            } else if (q.remaining_sec > 0) {
+                const m = Math.floor(q.remaining_sec / 60);
+                const s = q.remaining_sec % 60;
+                finishStr = `noch ${m > 0 ? m + 'min ' : ''}${s}s`;
+            }
+            const displayName = q.name || q.slot_type;
+            return `<div class="queue-item">
+                <span class="queue-badge ${q.slot_type}">${q.slot_type === 'build' ? 'Bau' : 'Labor'}</span>
+                <span>${displayName}</span>
+                ${finishStr ? `<span class="queue-finish">${finishStr}</span>` : ''}
+            </div>`;
+        }).join('');
+    }
+
+    // Fehler anzeigen
+    if (data.last_error) {
+        queueDiv.innerHTML += `<div style="color:var(--danger); font-size:0.78rem; margin-top:8px;">
+            Letzter Fehler: ${data.last_error}</div>`;
+    }
+}
+
+// ── Build / Research History ───────────────────────────────────────────────
+let _buildFilter = 'all';
+
+function setBuildFilter(f) {
+    _buildFilter = f;
+    document.querySelectorAll('[id^="build-filter-"]').forEach(b => b.classList.remove('btn-active'));
+    const btn = document.getElementById('build-filter-' + f);
+    if (btn) btn.classList.add('btn-active');
+    loadBuildEvents();
+}
+
+async function loadBuildEvents() {
+    const qs = rangeFrom ? `?from=${rangeFrom}&to=${rangeTo}` : '';
+    const typeFilter = _buildFilter !== 'all' ? `${qs ? '&' : '?'}type=${_buildFilter}` : '';
+    const url = `/api/build-events${qs}${typeFilter}`;
+    let events;
+    try { events = await fetch(url).then(r => r.json()); } catch { return; }
+
+    const el = document.getElementById('build-events-list');
+    if (!events || !events.length) {
+        el.innerHTML = '<div style="color:var(--text-dim);font-size:0.82rem;">Keine Einträge im Zeitraum.</div>';
+        return;
+    }
+
+    el.innerHTML = `
+        <table style="width:100%; border-collapse:collapse; font-size:0.82rem;">
+            <thead>
+                <tr style="color:var(--text-dim); border-bottom:1px solid var(--border);">
+                    <th style="text-align:left; padding:4px 8px;">Zeit</th>
+                    <th style="text-align:left; padding:4px 8px;">Typ</th>
+                    <th style="text-align:left; padding:4px 8px;">Name</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${events.map(e => {
+                    const ts = new Date(e.timestamp).toLocaleString('de-DE', {
+                        day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'
+                    });
+                    const badge = e.event_type === 'build'
+                        ? `<span class="queue-badge build">Bau</span>`
+                        : `<span class="queue-badge research">Labor</span>`;
+                    return `<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                        <td style="padding:4px 8px; color:var(--text-dim);">${ts}</td>
+                        <td style="padding:4px 8px;">${badge}</td>
+                        <td style="padding:4px 8px;">${e.name || e.type_key || '—'}</td>
+                    </tr>`;
+                }).join('')}
+            </tbody>
+        </table>`;
+}
+
+// ── Highscore Tables ───────────────────────────────────────────────────────
+function updateHighscoreTables() {
+    for (const [cat, title] of Object.entries(HS_CATEGORIES)) {
+        const container = document.getElementById('hs-table-' + cat);
+        if (!container) continue;
+        const entries = hsData[cat] || [];
+        if (!entries.length) {
+            container.innerHTML = `<p style="color:var(--text-dim)">Keine Daten fuer ${title}</p>`;
+            continue;
+        }
+        let html = `<table class="hs-table"><caption>${title}</caption>
+            <thead><tr><th class="rank">#</th><th>Spieler</th><th>Allianz</th><th class="val">Wert</th></tr></thead><tbody>`;
+        for (const e of entries) {
+            const me = e.username === MY_USERNAME ? ' class="me"' : '';
+            const alliance = e.alliance || '-';
+            html += `<tr${me}><td class="rank">${e.rank}</td><td>${e.username}</td>
+                <td class="alliance">${alliance}</td><td class="val">${formatNum(e.value)}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    }
+}
+
+// ── Highscore Charts ───────────────────────────────────────────────────────
+function updateHighscoreCharts() {
+    // Rank charts per category
+    for (const cat of Object.keys(HS_CATEGORIES)) {
+        const canvasId = 'chart-hs-rank-' + cat;
+        const datasets = [];
+        const users = (hsData.points || []).map(e => e.username);
+
+        for (const user of users) {
+            const tl = hsTimelines[`${user}:${cat}`] || [];
+            if (!tl.length) continue;
+            const isMe = user === MY_USERNAME;
+            datasets.push({
+                label: user,
+                data: tl.map(d => ({ x: d.epoch * 1000, y: d.rank })),
+                borderColor: isMe ? '#4fc3f7' : playerColor(user),
+                borderWidth: isMe ? 3 : 1,
+                pointRadius: isMe ? 3 : 0,
+                pointHitRadius: 6,
+                tension: 0.3,
+                fill: false,
+            });
+        }
+
+        const config = baseChartConfig(datasets, 'Rang');
+        config.options.scales.y.reverse = true;
+        config.options.scales.y.min = 1;
+        config.options.scales.y.beginAtZero = false;
+        config.options.plugins.legend.display = false;
+        config.options.plugins.tooltip.callbacks.label = item =>
+            `${item.dataset.label}: Rang ${item.parsed.y}`;
+        createOrUpdate(canvasId, config);
+    }
+
+    // Combined value chart (points category — all players over time)
+    const valDatasets = [];
+    const users = (hsData.points || []).map(e => e.username);
+    for (const user of users) {
+        const tl = hsTimelines[`${user}:points`] || [];
+        if (!tl.length) continue;
+        const isMe = user === MY_USERNAME;
+        valDatasets.push({
+            label: user,
+            data: tl.map(d => ({ x: d.epoch * 1000, y: d.value })),
+            borderColor: isMe ? '#4fc3f7' : playerColor(user),
+            borderWidth: isMe ? 3 : 1.2,
+            pointRadius: isMe ? 3 : 0,
+            pointHitRadius: 6,
+            tension: 0.3,
+            fill: false,
+        });
+    }
+    createOrUpdate('chart-hs-values', baseChartConfig(valDatasets, 'Punkte'));
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+    loadGoals();  // Goals früh laden, damit KPI-Karten Ziele kennen
+    setRange('24h');
+    startAutoRefresh();
+    setInterval(loadTasks, 5000);
+    loadTasks();
+});
+</script>
+</body>
+</html>

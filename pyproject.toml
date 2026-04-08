@@ -1,0 +1,25 @@
+[project]
+name = "icewars-bot"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+    "playwright>=1.44",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+icewars-bot = "icewars_bot.main:main"
+icewars-dashboard = "icewars_bot.dashboard:main"
+
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

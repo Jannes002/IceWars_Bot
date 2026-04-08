@@ -1,0 +1,24 @@
+# Credentials - never commit
+config.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# Logs
+logs/
+
+# Database
+data/
+
+# Playwright
+.playwright/
+
+# OS
+.DS_Store
