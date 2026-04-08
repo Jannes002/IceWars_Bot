@@ -100,6 +100,12 @@ def parse_args() -> argparse.Namespace:
         help="Take a page snapshot after login and exit (useful for debugging selectors)",
     )
     parser.add_argument(
+        "--dump-buildings",
+        action="store_true",
+        help="Dump build view (API + DOM) to logs/build_dump.json and exit. "
+             "Used to collect diagnostic data for strategy tuning.",
+    )
+    parser.add_argument(
         "--dashboard",
         action="store_true",
         default=True,
@@ -147,6 +153,15 @@ async def run(args: argparse.Namespace) -> None:
             if await auth.ensure_logged_in():
                 await scraper.snapshot("logs/snapshot.html")
                 print("Snapshot saved to logs/snapshot.html")
+            return
+
+        if args.dump_buildings:
+            if await auth.ensure_logged_in():
+                json_path = await scraper.dump_build_view("logs")
+                print(f"Build dump saved to {json_path}")
+                print("Bitte logs/build_dump.json (und ggf. logs/view_build.html) teilen.")
+            else:
+                print("Login fehlgeschlagen — siehe logs/login_failed.png")
             return
 
         bot = BotLoop(browser, scraper, strategy, executor, auth, config)

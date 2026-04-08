@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -80,6 +82,156 @@ _BUILD_QUEUE_JS = """
     return results;
 }
 """
+
+# JavaScript: dumpt die Gebäude-Ansicht — alle baubaren Gebäude mit Kosten,
+# Bauzeit, Level und ob der Button gerade aktiv ist. Wird für das Scoring
+# (Kosten/Nutzen/Zeit) in strategy.py benötigt.
+_BUILD_VIEW_DUMP_JS = r"""
+() => {
+    const view = document.getElementById('view-build');
+    if (!view) return { error: 'no_view_build', html_length: 0, options: [] };
+
+    function parseNumber(s) {
+        if (!s) return 0;
+        // "1.234" / "1,234" / "1234" → 1234
+        const cleaned = String(s).replace(/[^\d.,-]/g, '').replace(/[.,](?=\d{3}\b)/g, '');
+        const n = parseFloat(cleaned.replace(',', '.'));
+        return isNaN(n) ? 0 : n;
+    }
+
+    function parseTime(text) {
+        if (!text) return 0;
+        // Formate: "1h 30m 45s", "30m 45s", "45s", "1:30:45", "01:30", "90 min"
+        let sec = 0;
+        const hms = text.match(/(\d+)\s*h\s*(\d+)\s*m(?:\s*(\d+)\s*s)?/i);
+        if (hms) {
+            sec = parseInt(hms[1])*3600 + parseInt(hms[2])*60 + parseInt(hms[3]||'0');
+            return sec;
+        }
+        const ms = text.match(/(\d+)\s*m(?:in)?\s*(\d+)?\s*s?/i);
+        if (ms) {
+            sec = parseInt(ms[1])*60 + parseInt(ms[2]||'0');
+            return sec;
+        }
+        const colon = text.match(/(\d+):(\d{2}):(\d{2})/);
+        if (colon) {
+            return parseInt(colon[1])*3600 + parseInt(colon[2])*60 + parseInt(colon[3]);
+        }
+        const colon2 = text.match(/(\d+):(\d{2})(?!:)/);
+        if (colon2) {
+            return parseInt(colon2[1])*60 + parseInt(colon2[2]);
+        }
+        const onlySec = text.match(/(\d+)\s*s\b/i);
+        if (onlySec) return parseInt(onlySec[1]);
+        const onlyMin = text.match(/(\d+)\s*min/i);
+        if (onlyMin) return parseInt(onlyMin[1])*60;
+        return 0;
+    }
+
+    // Kosten-Keywords → Zielschlüssel (alle Varianten abdecken)
+    const costKeys = [
+        ['iron',      /\bEisen\b/i],
+        ['steel',     /\bStahl\b/i],
+        ['chemicals', /\bChem/i],
+        ['ice',       /\bEis\b/i],
+        ['water',     /\bWasser\b/i],
+        ['energy',    /\bEnergie\b/i],
+        ['vv4a',      /\bVV4A\b/i],
+        ['credits',   /\bCredits?\b/i],
+        ['population',/\bBev[öo]lk|\bSiedler\b|\bEinwohner\b/i],
+    ];
+
+    const options = [];
+
+    // Alle Buttons mit startBuild finden
+    const buttons = view.querySelectorAll("button[onclick*='startBuild']");
+    buttons.forEach(btn => {
+        const onclick = btn.getAttribute('onclick') || '';
+        const m = onclick.match(/startBuild\(['"]([^'"]+)['"]\)/);
+        if (!m) return;
+        const btype = m[1];
+
+        // Container-Zeile finden
+        const row = btn.closest('tr') || btn.closest('.build-item') || btn.closest('li') || btn.parentElement;
+        if (!row) return;
+
+        const rowText = (row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim();
+
+        // Name: erstes nicht-leeres strong/td/div/span
+        let name = '';
+        const nameEl = row.querySelector('.building-name, .bname, strong, b, td:first-child, .name');
+        if (nameEl) name = (nameEl.innerText || nameEl.textContent || '').trim();
+        if (!name) {
+            // Fallback: ersten Text-Chunk vor dem Doppelpunkt
+            const firstChunk = rowText.split(/[:|·]/)[0].trim();
+            name = firstChunk.split(/\s+\d/)[0].trim() || btype;
+        }
+
+        // Kosten: innerHTML nach Zahlen mit nachfolgendem Ressourcen-Label durchsuchen
+        // Strategie: innerText in Tokens zerlegen, jede Zahl mit dem nächsten Label verbinden
+        const cost = {};
+        const tokens = rowText.split(/\s+/);
+        for (let i = 0; i < tokens.length; i++) {
+            const t = tokens[i];
+            // Zahl (ggf. mit Tausenderpunkt)?
+            if (!/^[\d.,]+$/.test(t)) continue;
+            const val = parseNumber(t);
+            if (val <= 0) continue;
+            // Nächstes Wort = Einheit/Ressource
+            const next = (tokens[i+1] || '').replace(/[^A-Za-zäöüÄÖÜ]/g, '');
+            for (const [key, re] of costKeys) {
+                if (re.test(next)) {
+                    cost[key] = val;
+                    break;
+                }
+            }
+        }
+
+        // Fallback: globales Regex über rowText
+        if (Object.keys(cost).length === 0) {
+            for (const [key, re] of costKeys) {
+                const match = rowText.match(new RegExp('([\\d.,]+)\\s*(?:' + re.source.slice(2, -2) + ')', 'i'));
+                if (match) cost[key] = parseNumber(match[1]);
+            }
+        }
+
+        // Bauzeit: Suche nach Zeit-Pattern im Zeilentext
+        let time_sec = 0;
+        const timeRe = /(\d+h\s*\d+m\s*\d+s|\d+h\s*\d+m|\d+m\s*\d+s|\d+:\d{2}:\d{2}|\d+:\d{2}|\d+\s*min|\d+\s*s\b)/i;
+        const tm = rowText.match(timeRe);
+        if (tm) time_sec = parseTime(tm[1]);
+
+        // Level / Anzahl aus "Stufe X" oder "Lvl. X" oder "(X)"
+        let level = 0;
+        const lvl = rowText.match(/Stufe\s*(\d+)|Lvl\.?\s*(\d+)|\((\d+)\)/i);
+        if (lvl) level = parseInt(lvl[1] || lvl[2] || lvl[3] || '0');
+
+        const disabled = btn.disabled || btn.getAttribute('disabled') !== null ||
+                         (btn.className || '').includes('disabled');
+
+        options.push({
+            building_type: btype,
+            name: name.slice(0, 80),
+            cost,
+            time_sec,
+            level,
+            is_buildable: !disabled,
+            row_text: rowText.slice(0, 300),   // Rohtext zur Diagnose
+            button_classes: btn.className || '',
+            button_disabled: disabled,
+        });
+    });
+
+    return {
+        error: null,
+        view_visible: view.style.display !== 'none',
+        options_count: options.length,
+        options,
+        raw_view_text: (view.innerText || '').slice(0, 2000),
+    };
+}
+"""
+
 
 # JavaScript: prüft ob das Forschungslabor gerade belegt ist und liefert ggf. Infos
 _RESEARCH_ACTIVE_JS = """
@@ -253,3 +405,113 @@ class GameScraper:
         content = await self._page.content()
         Path(path).write_text(content, encoding="utf-8")
         logger.info("Snapshot gespeichert: %s", path)
+
+    async def dump_build_view(self, out_dir: str | Path = "logs") -> Path:
+        """Diagnose-Dump der Gebäude-Ansicht.
+
+        Öffnet die Gebäude-Ansicht (#btn-gebbau), versucht alle relevanten
+        API-Endpunkte zu finden und extrahiert das DOM mit Kosten, Bauzeit,
+        Level und Status jedes Gebäudes. Schreibt:
+
+        - logs/build_dump.json  — strukturierter Dump (API + DOM)
+        - logs/build_view.html  — vollständiger HTML-Snapshot zur Analyse
+
+        Gibt den Pfad zur JSON-Datei zurück.
+        """
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        logger.info("Build-View-Dump startet...")
+
+        # 1) Gebäudeansicht öffnen
+        try:
+            await self._page.click("#btn-gebbau")
+            await asyncio.sleep(1.5)
+        except Exception as e:
+            logger.warning("Konnte #btn-gebbau nicht klicken: %s", type(e).__name__)
+
+        # Versteckte Gebäude einblenden, falls Checkbox da ist
+        try:
+            cb = await self._page.query_selector("#show-hidden-buildings")
+            if cb and not await cb.is_checked():
+                await cb.click()
+                await asyncio.sleep(0.5)
+        except Exception:
+            pass
+
+        dump: dict[str, Any] = {
+            "timestamp": "",
+            "url": self._page.url,
+        }
+
+        # 2) Zeitstempel
+        from datetime import datetime, timezone
+        dump["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+        # 3) API-Endpunkte durchprobieren
+        api_candidates = [
+            "/api/city/",
+            "/api/buildings/",
+            "/api/build/",
+            "/api/city/buildings",
+        ]
+        dump["api"] = {}
+        for ep in api_candidates:
+            try:
+                result = await self._api_get(ep)
+                dump["api"][ep] = result
+            except Exception as e:
+                dump["api"][ep] = {"_exception": type(e).__name__}
+
+        # 4) DOM-Extraktion: Gebäude-Optionen mit Kosten/Zeit/Level
+        try:
+            dom_data = await self._page.evaluate(_BUILD_VIEW_DUMP_JS)
+            dump["dom"] = dom_data
+        except Exception as e:
+            logger.error("DOM-Extraktion fehlgeschlagen: %s", e)
+            dump["dom"] = {"_exception": str(e)}
+
+        # 5) HTML-Snapshot der kompletten Build-View
+        html_path = out_path / "build_view.html"
+        try:
+            html = await self._page.content()
+            html_path.write_text(html, encoding="utf-8")
+            dump["html_snapshot"] = str(html_path)
+        except Exception as e:
+            dump["html_snapshot_error"] = str(e)
+
+        # 6) Ausschnitt des #view-build-Containers als separate Datei
+        try:
+            view_html = await self._page.evaluate(
+                "() => { const v = document.getElementById('view-build'); return v ? v.outerHTML : ''; }"
+            )
+            if view_html:
+                (out_path / "view_build.html").write_text(view_html, encoding="utf-8")
+                dump["view_build_html"] = str(out_path / "view_build.html")
+        except Exception:
+            pass
+
+        # 7) JSON schreiben
+        json_path = out_path / "build_dump.json"
+        json_path.write_text(
+            json.dumps(dump, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+
+        # 8) Kurzer Überblick ins Log
+        dom = dump.get("dom", {})
+        opt_count = dom.get("options_count", 0) if isinstance(dom, dict) else 0
+        logger.info(
+            "Build-View-Dump fertig: %d Gebäude-Optionen erkannt → %s",
+            opt_count, json_path.resolve(),
+        )
+        if opt_count > 0:
+            sample = dom.get("options", [])[:3]
+            for o in sample:
+                logger.info(
+                    "  Beispiel: type=%s name=%r cost=%s time=%ds buildable=%s",
+                    o.get("building_type"), o.get("name"),
+                    o.get("cost"), o.get("time_sec"), o.get("is_buildable"),
+                )
+
+        return json_path
