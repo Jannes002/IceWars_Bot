@@ -2,7 +2,7 @@
 import pytest
 from icewars_bot.config import Config, AuthConfig, BrowserConfig, BotConfig, StrategyConfig
 from icewars_bot.state import (
-    GameState, Resources, Capacity, BuildQueueItem, ActiveResearch,
+    GameState, Resources, Rates, Capacity, BuildQueueItem, ActiveResearch,
 )
 from icewars_bot.strategy import (
     Strategy, SATISFACTION_MIN, SATISFACTION_WARN,
@@ -23,6 +23,9 @@ def gs(**kwargs) -> GameState:
         population_free=80, population_total=400, population_max=400,
         satisfaction=0.90, credits_rate=0, eco_points=0,
         resources=Resources(credits=100),
+        # Alle Raten positiv per Default — sonst triggert _fix_negative_rate
+        rates=Rates(iron=10, steel=10, chemicals=10, ice=10,
+                    water=10, energy=10, vv4a=10, credits=10, fp=10),
     )
     defaults.update(kwargs)
     return GameState(**defaults)

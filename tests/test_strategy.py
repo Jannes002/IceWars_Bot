@@ -27,8 +27,13 @@ def research_item(type_: str, name: str, *, researched=False, prereq=True, affor
 
 def test_build_action_when_slots_free():
     strategy = Strategy(make_config())
-    state = GameState(max_build_slots=2, build_queue=[],
-                      population_free=100, population_max=400, satisfaction=0.90)
+    state = GameState(
+        max_build_slots=2, build_queue=[],
+        population_free=100, population_max=400, satisfaction=0.90,
+        # Positive Raten — sonst triggert _fix_negative_rate
+        rates=Rates(iron=10, steel=10, chemicals=10, ice=10,
+                    water=10, energy=10, vv4a=10, credits=10, fp=10),
+    )
     actions = strategy.decide(state)
     assert any(a.type == "build_next_building" for a in actions)
 
@@ -147,3 +152,78 @@ def test_research_priority_function():
     in_list = research_item(RESEARCH_PRIORITY[0], "Test", affordable=True)
     not_in_list = research_item("xyz_unknown", "Unknown", affordable=True)
     assert _research_priority(in_list) < _research_priority(not_in_list)
+
+
+# ── Negative Tendenz fixen (Top-Priorität) ────────────────────────────────────
+
+def _good_state(**kwargs) -> GameState:
+    """Realistische 'gesunde' Stadt — alle Raten positiv, Bevölkerung OK."""
+    base = dict(
+        max_build_slots=2, build_queue=[],
+        population_free=100, population_max=400, satisfaction=0.90,
+        rates=Rates(iron=10, steel=10, chemicals=10, ice=10,
+                    water=10, energy=10, vv4a=10, credits=10, fp=10),
+    )
+    base.update(kwargs)
+    return GameState(**base)
+
+
+def test_negative_iron_rate_builds_iron_mine():
+    strategy = Strategy(make_config())
+    state = _good_state(rates=Rates(iron=-5, steel=10, chemicals=10, ice=10,
+                                     water=10, energy=10, vv4a=10, credits=10, fp=10))
+    actions = strategy.decide(state)
+    build_actions = [a for a in actions if a.type == "build_specific"]
+    assert build_actions, "sollte ein Produktionsgebäude bauen"
+    assert build_actions[0].params["building_type"] == "iron_mine"
+
+
+def test_negative_energy_rate_builds_solar():
+    strategy = Strategy(make_config())
+    state = _good_state(rates=Rates(iron=10, steel=10, chemicals=10, ice=10,
+                                     water=10, energy=-3, vv4a=10, credits=10, fp=10))
+    actions = strategy.decide(state)
+    build_actions = [a for a in actions if a.type == "build_specific"]
+    assert build_actions
+    assert build_actions[0].params["building_type"] == "solar_plant"
+
+
+def test_worst_negative_rate_first():
+    """Wenn mehrere Raten negativ sind, wird die schlimmste zuerst gefixt."""
+    strategy = Strategy(make_config())
+    state = _good_state(rates=Rates(iron=-1, steel=10, chemicals=10, ice=10,
+                                     water=-50, energy=10, vv4a=10, credits=10, fp=10))
+    actions = strategy.decide(state)
+    build_actions = [a for a in actions if a.type == "build_specific"]
+    assert build_actions[0].params["building_type"] == "water_pump"  # -50 ist schlimmer als -1
+
+
+def test_skip_when_production_already_in_queue():
+    """Wenn das Produktionsgebäude schon im Bau ist, weiter zur nächsten Ressource."""
+    strategy = Strategy(make_config())
+    state = _good_state(
+        rates=Rates(iron=-1, steel=10, chemicals=10, ice=10,
+                    water=-2, energy=10, vv4a=10, credits=10, fp=10),
+        build_queue=[BuildQueueItem("water_pump", "Wasserpumpe")],
+    )
+    actions = strategy.decide(state)
+    build_actions = [a for a in actions if a.type == "build_specific"]
+    # Wasserpumpe schon im Bau → nimmt iron_mine als nächste negative Rate
+    assert build_actions[0].params["building_type"] == "iron_mine"
+
+
+def test_zero_rate_also_triggers():
+    """Eine Rate von 0 ist nicht positiv und sollte ebenfalls triggern."""
+    strategy = Strategy(make_config())
+    state = _good_state(rates=Rates(iron=0, steel=10, chemicals=10, ice=10,
+                                     water=10, energy=10, vv4a=10, credits=10, fp=10))
+    actions = strategy.decide(state)
+    build_actions = [a for a in actions if a.type == "build_specific"]
+    assert build_actions[0].params["building_type"] == "iron_mine"
+
+
+def test_all_positive_falls_through_to_normal_build():
+    strategy = Strategy(make_config())
+    state = _good_state()  # alle Raten = 10
+    actions = strategy.decide(state)
+    assert any(a.type == "build_next_building" for a in actions)

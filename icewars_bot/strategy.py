@@ -47,6 +47,18 @@ STORAGE_BUILDINGS: dict[str, tuple[str, str]] = {
     "energy":    ("energy_storage",      "Energielager"),
 }
 
+# ── Ressource → Produktionsgebäude (für negative Rate) ───────────────────────
+PRODUCTION_BUILDINGS: dict[str, tuple[str, str]] = {
+    "iron":      ("iron_mine",     "Eisenmine"),
+    "steel":     ("steel_mill",    "Stahlwerk"),
+    "chemicals": ("chem_plant",    "Chemiewerk"),
+    "ice":       ("ice_mine",      "Eisabbau"),
+    "water":     ("water_pump",    "Wasserpumpe"),
+    "energy":    ("solar_plant",   "Solaranlage"),
+    "vv4a":      ("vv4a_plant",    "VV4A-Anlage"),
+    "fp":        ("research_lab",  "Forschungslabor"),
+}
+
 # ── Wohngebäude (billig → teuer) ─────────────────────────────────────────────
 HOUSING_BUILDINGS: list[tuple[str, str, int]] = [
     # (building_type, name, pop_added)
@@ -142,11 +154,13 @@ class Strategy:
     """Regelbasierte Kolonie-Entwicklungsstrategie.
 
     Prioritäten (höchste zuerst):
-    1. Zufriedenheit retten (< 0 % → sofort, < 50 % → vorsorglich)
-    2. Bevölkerung sichern (freie Siedler < 20 % → Wohnraum bauen)
-    3. Lager erweitern (Ressource ≥ 80 % der Kapazität)
-    4. Normaler Gebäudebau (Produktion steigern)
-    5. Forschung starten
+    1. Zufriedenheit retten (kritisch < 0 %)
+    2. NEGATIVE TENDENZ FIXEN — jede Ressource/FP mit Rate ≤ 0 → Produktionsbau
+    3. Zufriedenheit vorsorglich (< warn-Schwelle)
+    4. Bevölkerung sichern (freie Siedler < 20 % → Wohnraum bauen)
+    5. Lager erweitern (Ressource ≥ 80 % der Kapazität)
+    6. Normaler Gebäudebau (Produktion steigern)
+    7. Forschung starten
     """
 
     def __init__(self, config: Config) -> None:
@@ -202,29 +216,76 @@ class Strategy:
             if action:
                 return action
 
-        # 2) WARNUNG: Zufriedenheit niedrig
+        # 2) NEGATIVE TENDENZ — jede Ressource/FP die schrumpft sofort fixen
+        neg_action = self._fix_negative_rate(state)
+        if neg_action:
+            return neg_action
+
+        # 3) WARNUNG: Zufriedenheit niedrig
         if state.satisfaction < sat_warn:
             action = self._build_happiness(state, reason=f"Zufriedenheit niedrig ({state.satisfaction*100:.0f}%)")
             if action:
                 return action
 
-        # 3) Bevölkerung zu wenig freie Siedler?
+        # 4) Bevölkerung zu wenig freie Siedler?
         if state.free_pop_ratio < pop_min:
             action = self._build_housing(state)
             if action:
                 return action
 
-        # 4) Lager voll?
+        # 5) Lager voll?
         storage_action = self._check_storage(state)
         if storage_action:
             return storage_action
 
-        # 5) Normaler Gebäudebau
+        # 6) Normaler Gebäudebau
         logger.info(
             "%d freie Bauslot(s) — normaler Produktionsbau.",
             state.max_build_slots - len(state.build_queue),
         )
         return Action("build_next_building", {"aggression": self._config.strategy.aggression})
+
+    # ──────────────────────────────────────────────────────────────────────
+    #  Negative Tendenz fixen (Top-Priorität)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _fix_negative_rate(self, state: GameState) -> Optional[Action]:
+        """Wenn eine Rate ≤ 0 ist → passendes Produktionsgebäude bauen.
+
+        Reihenfolge: schlimmste (negativste) Rate zuerst. Eine Ressource wird
+        übersprungen wenn das Produktionsgebäude bereits in der Bauschlange ist.
+        """
+        # Alle Ressourcen + FP prüfen, sortiert nach Rate (negativste zuerst)
+        check: list[tuple[float, str]] = []
+        for resource in PRODUCTION_BUILDINGS.keys():
+            rate = getattr(state.rates, resource, 0)
+            if rate <= 0:
+                check.append((rate, resource))
+
+        if not check:
+            return None
+
+        check.sort()  # negativste zuerst
+
+        queued_types = {q.building_type for q in state.build_queue}
+
+        for rate, resource in check:
+            btype, bname = PRODUCTION_BUILDINGS[resource]
+            if btype in queued_types:
+                logger.debug("'%s' schon im Bau — überspringe.", bname)
+                continue
+
+            logger.warning(
+                "Negative Tendenz: %s = %+.1f/h → baue '%s' für positiven Trend.",
+                resource, rate, bname,
+            )
+            return Action("build_specific", {
+                "building_type": btype,
+                "building_name": bname,
+                "reason": f"{resource} Rate {rate:+.1f}/h",
+            })
+
+        return None
 
     # ──────────────────────────────────────────────────────────────────────
     #  Zufriedenheit
