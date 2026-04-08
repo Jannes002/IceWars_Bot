@@ -33,6 +33,7 @@ class Authenticator:
 
     async def _do_login(self) -> bool:
         try:
+            logger.info("Login-Versuch mit Benutzer '%s'...", self._config.auth.username)
             await self._page.fill("#login-username", self._config.auth.username)
             await self._page.fill("#login-password", self._config.auth.password)
             await self._page.click("#btn-login")
@@ -41,9 +42,60 @@ class Authenticator:
             if await self._is_logged_in():
                 logger.info("Login OK.")
                 return True
-            else:
-                logger.error("Login fehlgeschlagen — Zugangsdaten prüfen.")
-                return False
-        except Exception as e:
-            logger.error("Login: %s", type(e).__name__)
+
+            # Diagnose: Was sagt die Seite?
+            error_text = await self._extract_login_error()
+            current_url = self._page.url
+            logger.error(
+                "Login fehlgeschlagen | User='%s' | URL=%s | Fehler='%s'",
+                self._config.auth.username,
+                current_url,
+                error_text or "(keine Fehlermeldung gefunden)",
+            )
+
+            # Screenshot zur Diagnose
+            try:
+                from pathlib import Path
+                shot_dir = Path("logs")
+                shot_dir.mkdir(exist_ok=True)
+                shot_path = shot_dir / "login_failed.png"
+                await self._page.screenshot(path=str(shot_path))
+                logger.error("Screenshot: %s", shot_path.resolve())
+            except Exception:
+                pass
+
             return False
+        except Exception as e:
+            logger.error("Login-Exception: %s: %s", type(e).__name__, e)
+            return False
+
+    async def _extract_login_error(self) -> str:
+        """Versucht, eine sichtbare Fehlermeldung von der Login-Seite zu lesen."""
+        selectors = [
+            "#login-error",
+            ".login-error",
+            ".error-message",
+            "[class*='error']",
+            "#message",
+        ]
+        for sel in selectors:
+            try:
+                el = await self._page.query_selector(sel)
+                if el:
+                    text = (await el.inner_text()).strip()
+                    if text:
+                        return text
+            except Exception:
+                continue
+        # Fallback: nach "falsch", "invalid", "wrong" im Body suchen
+        try:
+            body_text = await self._page.evaluate("() => document.body.innerText")
+            for keyword in ("falsch", "invalid", "wrong", "incorrect", "ungültig"):
+                if keyword.lower() in body_text.lower():
+                    # Zeile mit dem Keyword extrahieren
+                    for line in body_text.split("\n"):
+                        if keyword.lower() in line.lower():
+                            return line.strip()[:200]
+        except Exception:
+            pass
+        return ""

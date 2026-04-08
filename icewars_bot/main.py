@@ -132,58 +132,89 @@ async def run(args: argparse.Namespace) -> None:
         config.browser.headless = args.headless
 
     browser = BrowserManager(config)
-    scraper = GameScraper(browser.page if False else None)  # page set after start()
     strategy = Strategy(config)
 
     # Wire up components after browser starts
     await browser.start()
-    page = browser.page
+    try:
+        page = browser.page
 
-    auth = Authenticator(page, config)
-    scraper = GameScraper(page)
-    executor = ActionExecutor(page)
+        auth = Authenticator(page, config)
+        scraper = GameScraper(page)
+        executor = ActionExecutor(page)
 
-    if args.snapshot:
-        if await auth.ensure_logged_in():
-            await scraper.snapshot("logs/snapshot.html")
-            print("Snapshot saved to logs/snapshot.html")
-        await browser.stop()
+        if args.snapshot:
+            if await auth.ensure_logged_in():
+                await scraper.snapshot("logs/snapshot.html")
+                print("Snapshot saved to logs/snapshot.html")
+            return
+
+        bot = BotLoop(browser, scraper, strategy, executor, auth, config)
+
+        # Dashboard im Hintergrund-Thread starten
+        if args.dashboard:
+            dash_thread = threading.Thread(
+                target=run_dashboard,
+                kwargs={"port": args.dashboard_port, "db_path": DB_PATH},
+                daemon=True,
+                name="dashboard",
+            )
+            dash_thread.start()
+            logger.info("Dashboard laeuft auf http://localhost:%d", args.dashboard_port)
+
+        # Handle Ctrl+C gracefully — auf Unix via Loop-Signalhandler,
+        # auf Windows läuft asyncio.run() ohnehin sauber durch KeyboardInterrupt.
+        main_task = asyncio.current_task()
+        if sys.platform != "win32":
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(sig, lambda: main_task.cancel() if main_task else None)
+                except (NotImplementedError, RuntimeError):
+                    pass
+
+        try:
+            await bot.run()
+        except asyncio.CancelledError:
+            logger.info("Bot abgebrochen — fahre herunter.")
+    finally:
+        # Browser IMMER sauber schließen, sonst gibt's auf Windows
+        # ProactorBasePipeTransport-Warnungen beim Interpreter-Shutdown.
+        try:
+            await browser.stop()
+        except Exception as e:
+            logger.warning("Browser-Stop-Fehler ignoriert: %s", e)
+
+
+def _silence_windows_proactor_warnings() -> None:
+    """Unterdrückt die harmlosen 'I/O operation on closed pipe'-Warnungen,
+    die unter Windows + Python 3.12+ in Kombination mit Playwright/Subprocess
+    während des Interpreter-Shutdowns aus dem ProactorBasePipeTransport kommen.
+    Sie sind kosmetisch und beeinflussen den Bot-Lauf nicht.
+    """
+    if sys.platform != "win32":
         return
-
-    bot = BotLoop(browser, scraper, strategy, executor, auth, config)
-
-    # Dashboard im Hintergrund-Thread starten
-    if args.dashboard:
-        dash_thread = threading.Thread(
-            target=run_dashboard,
-            kwargs={"port": args.dashboard_port, "db_path": DB_PATH},
-            daemon=True,
-            name="dashboard",
-        )
-        dash_thread.start()
-        logger.info("Dashboard laeuft auf http://localhost:%d", args.dashboard_port)
-
-    # Handle Ctrl+C gracefully
-    loop = asyncio.get_event_loop()
-    main_task = asyncio.current_task()
-
-    def _shutdown(sig, frame):
-        print("\nShutting down...")
-        if main_task:
-            main_task.cancel()
-
-    signal.signal(signal.SIGINT, _shutdown)
-    signal.signal(signal.SIGTERM, _shutdown)
-
-    await bot.run()
+    import warnings
+    warnings.filterwarnings(
+        "ignore",
+        message=".*I/O operation on closed pipe.*",
+        category=ResourceWarning,
+    )
+    # Auch Asyncio-Loop-Cleanup-Spam dämpfen
+    asyncio_logger = logging.getLogger("asyncio")
+    asyncio_logger.setLevel(logging.CRITICAL)
 
 
 def main() -> None:
     debug_log = setup_logging()
+    _silence_windows_proactor_warnings()
     args = parse_args()
     log = logging.getLogger(__name__)
     log.info("Debug-Log für Claude Code Upload: %s", debug_log.resolve())
-    asyncio.run(run(args))
+    try:
+        asyncio.run(run(args))
+    except KeyboardInterrupt:
+        log.info("Beendet durch Benutzer (Ctrl+C).")
 
 
 if __name__ == "__main__":
