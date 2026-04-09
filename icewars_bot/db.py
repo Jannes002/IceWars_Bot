@@ -188,6 +188,15 @@ def record_snapshot(state: GameState, path: Path = DB_PATH) -> None:
     logger.debug("Snapshot gespeichert (epoch=%.0f)", epoch)
 
 
+def get_last_stop_epoch(path: Path = DB_PATH) -> Optional[float]:
+    """Gibt end_epoch der letzten sauber beendeten Session zurück, oder None."""
+    with _connect(path) as conn:
+        row = conn.execute(
+            "SELECT MAX(end_epoch) as last_stop FROM bot_sessions WHERE end_epoch IS NOT NULL"
+        ).fetchone()
+    return float(row["last_stop"]) if row and row["last_stop"] else None
+
+
 def start_session(path: Path = DB_PATH) -> int:
     """Startet eine neue Bot-Session und gibt die Session-ID zurück."""
     now = datetime.now(timezone.utc)

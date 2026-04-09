@@ -13,7 +13,7 @@ from .browser import BrowserManager
 from .config import Config
 from .db import (
     init_db, record_snapshot, record_highscores, record_build_event,
-    start_session, end_session, RECORD_INTERVAL_S,
+    start_session, end_session, get_last_stop_epoch, RECORD_INTERVAL_S,
 )
 from .scraper import GameScraper
 from .state import BuildQueueItem, GameState, Resources, parse_state
@@ -140,6 +140,10 @@ class BotLoop:
         init_db()
         self._session_id = start_session()
 
+        # Ausfallzeit ermitteln, bevor die neue Session startet
+        last_stop = get_last_stop_epoch()
+        downtime_s = (time.time() - last_stop) if last_stop else None
+
         await self._browser.start()
 
         if not await self._auth.ensure_logged_in():
@@ -147,8 +151,19 @@ class BotLoop:
             await self._browser.stop()
             return
 
+        # Startup-Meldung je nach Ausfallzeit
+        if downtime_s is None or downtime_s > 300:
+            start_msg = "🤖 <b>IceWars-Bot gestartet</b>\nÜberwache Rang und Baufortschritt."
+            logger.info("Bot gestartet (Erststart oder Ausfallzeit >5 min).")
+        else:
+            mins = int(downtime_s // 60)
+            secs = int(downtime_s % 60)
+            downtime_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+            start_msg = f"🔄 <b>Update von GitHub erfolgt</b>\nBot läuft wieder (war {downtime_str} aus)."
+            logger.info("Bot neugestartet nach %.0f s (Update-Neustart).", downtime_s)
+
         logger.info("Hauptschleife aktiv. Stoppen mit Ctrl+C.")
-        await self._notify("🤖 <b>IceWars-Bot gestartet</b>\nÜberwache Rang und Baufortschritt.")
+        await self._notify(start_msg)
         try:
             # Status-Reporter, DB-Recorder und Auth-Checker als parallele Tasks
             status_task = asyncio.create_task(self._status_reporter())
