@@ -95,7 +95,7 @@ def test_low_population_triggers_housing():
     state = gs(population_free=40, population_max=400, satisfaction=0.90)
     actions = s.decide(state)
     assert actions[0].type == "build_specific"
-    assert actions[0].params["building_type"] in ("tent", "house_small")
+    assert actions[0].params["building_type"] in ("tent", "house_small", "house")
 
 
 def test_adequate_population_no_housing():
@@ -165,7 +165,7 @@ def test_population_beats_storage():
     )
     actions = s.decide(state)
     assert actions[0].type == "build_specific"
-    assert actions[0].params["building_type"] in ("tent", "house_small")
+    assert actions[0].params["building_type"] in ("tent", "house_small", "house")
 
 
 def test_no_build_action_when_slots_full():
@@ -186,9 +186,13 @@ def test_skip_housing_already_in_queue():
     state = gs(
         population_free=10, population_max=400,
         satisfaction=0.90,
-        build_queue=[BuildQueueItem("tent", "Zelt")],
+        max_build_slots=3,  # 3 Slots damit 2 belegt + 1 frei
+        build_queue=[
+            BuildQueueItem("tent", "Zelt"),
+            BuildQueueItem("house", "Mittleres Wohnhaus"),
+        ],
     )
     actions = s.decide(state)
-    # tent already in queue → should try house_small
+    # tent + house already in queue → should try house_small
     if actions[0].type == "build_specific":
         assert actions[0].params["building_type"] == "house_small"

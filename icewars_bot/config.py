@@ -37,11 +37,19 @@ class StrategyConfig:
 
 
 @dataclass
+class TelegramConfig:
+    enabled: bool = False
+    token: str = ""
+    chat_id: str = ""
+
+
+@dataclass
 class Config:
     auth: AuthConfig
     browser: BrowserConfig
     bot: BotConfig
     strategy: StrategyConfig
+    telegram: TelegramConfig = field(default_factory=TelegramConfig)
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -65,4 +73,11 @@ class Config:
         strategy = StrategyConfig(
             aggression=strategy_data.get("aggression", "balanced"),
         )
-        return cls(auth=auth, browser=browser, bot=bot, strategy=strategy)
+        tg_data = data.get("telegram", {})
+        telegram = TelegramConfig(
+            enabled=tg_data.get("enabled", False),
+            token=tg_data.get("token", ""),
+            chat_id=str(tg_data.get("chat_id", "")),
+        )
+        return cls(auth=auth, browser=browser, bot=bot, strategy=strategy,
+                   telegram=telegram)

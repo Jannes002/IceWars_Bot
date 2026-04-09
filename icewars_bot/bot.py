@@ -15,8 +15,9 @@ from .db import (
     start_session, end_session, RECORD_INTERVAL_S,
 )
 from .scraper import GameScraper
-from .state import GameState, Resources, parse_state
+from .state import BuildQueueItem, GameState, Resources, parse_state
 from .strategy import Action, Strategy, building_display_name
+from .telegram import TelegramNotifier, make_notifier
 from . import task_state as ts
 from . import cooldown
 
@@ -125,6 +126,11 @@ class BotLoop:
         self._last_raw: Optional[dict] = None
         self._session_id: Optional[int] = None
 
+        # Telegram
+        self._tg: Optional[TelegramNotifier] = make_notifier(config)
+        self._last_rank: Optional[int] = None          # letzter bekannter Rang (Gesamtpunkte)
+        self._last_queue: list[BuildQueueItem] = []    # Bauwarteschlange vorherige Runde
+
     async def run(self) -> None:
         logger.info("Bot startet...")
         ts.set_status("starting")
@@ -141,6 +147,7 @@ class BotLoop:
             return
 
         logger.info("Hauptschleife aktiv. Stoppen mit Ctrl+C.")
+        await self._notify("🤖 <b>IceWars-Bot gestartet</b>\nÜberwache Rang und Baufortschritt.")
         try:
             # Status-Reporter, DB-Recorder und Auth-Checker als parallele Tasks
             status_task = asyncio.create_task(self._status_reporter())
@@ -166,6 +173,7 @@ class BotLoop:
             self._log_final_status()
             ts.set_status("stopped")
             logger.info("Bot gestoppt.")
+            await self._notify("🛑 <b>IceWars-Bot gestoppt.</b>")
             await self._browser.stop()
 
     async def _status_reporter(self) -> None:
@@ -268,6 +276,58 @@ class BotLoop:
             sep, msg, sep,
         )
 
+    # ──────────────────────────────────────────────────────────────────────
+    #  Telegram-Hilfsmethoden
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def _notify(self, text: str) -> None:
+        """Sendet eine Telegram-Nachricht — tut nichts wenn Telegram deaktiviert."""
+        if self._tg:
+            await self._tg.send(text)
+
+    def _extract_rank(self, raw: dict) -> Optional[int]:
+        """Liest den eigenen Rang aus den Highscore-Daten (Kategorie 'points')."""
+        username = self._config.auth.username.lower()
+        entries = raw.get("highscore", {}).get("points", {}).get("entries", [])
+        for entry in entries:
+            if entry.get("username", "").lower() == username:
+                return int(entry.get("rank", 0)) or None
+        return None
+
+    async def _check_rank_change(self, raw: dict) -> None:
+        """Vergleicht den aktuellen Rang mit dem letzten — sendet bei Änderung."""
+        current_rank = self._extract_rank(raw)
+        if current_rank is None:
+            return
+        if self._last_rank is not None and current_rank != self._last_rank:
+            diff = self._last_rank - current_rank
+            arrow = "📈" if diff > 0 else "📉"
+            direction = "verbessert" if diff > 0 else "verschlechtert"
+            msg = (
+                f"{arrow} <b>Rang-Änderung!</b>\n"
+                f"Gesamtpunkte: Platz {self._last_rank} → <b>Platz {current_rank}</b> "
+                f"({direction} um {abs(diff)})"
+            )
+            logger.info("Rang-Änderung: %d → %d", self._last_rank, current_rank)
+            await self._notify(msg)
+        self._last_rank = current_rank
+
+    async def _check_completed_buildings(self, state: GameState) -> None:
+        """Erkennt fertiggestellte Gebäude (Einträge die aus der Queue verschwunden sind)."""
+        if not self._last_queue:
+            return  # erste Runde — keine Vergleichsbasis
+
+        # Zähle wie oft jeder Name in der alten und neuen Queue vorkommt
+        from collections import Counter
+        prev_counts = Counter(item.name for item in self._last_queue if item.name)
+        curr_counts = Counter(item.name for item in state.build_queue if item.name)
+
+        for name, prev_n in prev_counts.items():
+            finished = prev_n - curr_counts.get(name, 0)
+            for _ in range(finished):
+                logger.info("Gebäude fertig: '%s'", name)
+                await self._notify(f"🏗️ <b>Gebäude fertiggestellt!</b>\n{name}")
+
     async def _run_turn(self) -> None:
         try:
             raw = await self._scraper.scrape()
@@ -295,6 +355,13 @@ class BotLoop:
                 )
                 # Ersten Snapshot sofort speichern
                 self._record_to_db()
+
+            # Telegram: Rang-Änderung + fertige Gebäude prüfen
+            await self._check_rank_change(raw)
+            await self._check_completed_buildings(state)
+
+            # Bauwarteschlange für nächste Runde merken
+            self._last_queue = list(state.build_queue)
 
             # Task-State: Warteschlange aus dem Spiel aktualisieren (immer, auch pausiert)
             ts.update_game_queue(state.build_queue, state.active_research)
@@ -346,6 +413,11 @@ class BotLoop:
             if self._consecutive_failures >= self._config.bot.max_retries:
                 logger.warning("Max. Fehler erreicht — Browser-Neustart.")
                 self._stats.browser_restarts += 1
+                await self._notify(
+                    f"⚠️ <b>Bot-Fehler: Browser-Neustart</b>\n"
+                    f"Fehler: <code>{type(e).__name__}</code>\n"
+                    f"Neustart #{self._stats.browser_restarts}"
+                )
                 await self._browser.restart()
                 await self._auth.ensure_logged_in()
                 self._consecutive_failures = 0
