@@ -287,6 +287,9 @@ class BotLoop:
                     ts.set_paused(False)
                     logger.info("Telegram: Bot fortgesetzt via /start")
                     await self._notify("▶️ <b>Bot läuft wieder.</b>")
+                elif text == "/status":
+                    logger.info("Telegram: Statusbericht angefordert via /status")
+                    await self._send_daily_report()
 
     def _record_to_db(self) -> None:
         """Schreibt den aktuellen GameState + Highscores in die SQLite-DB."""
