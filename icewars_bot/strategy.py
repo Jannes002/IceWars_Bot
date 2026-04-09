@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from .config import Config
-from .state import Capacity, GameState, ResearchItem
+from .state import BuildingInfo, Capacity, GameState, ResearchItem
 from . import goals as G
 from . import cooldown
 
@@ -60,20 +60,20 @@ PRODUCTION_BUILDINGS: dict[str, tuple[str, str]] = {
     "fp":        ("research_lab",  "Forschungslabor"),
 }
 
-# ── Wohngebäude (billig → teuer) ─────────────────────────────────────────────
+# ── Wohngebäude (bestes zuerst — für den Legacy-Fallback) ────────────────────
 HOUSING_BUILDINGS: list[tuple[str, str, int]] = [
-    # (building_type, name, pop_added)
-    ("tent",        "Zelt",             15),
-    ("house_small", "Kleines Wohnhaus", 60),
+    # (building_type, name, pop_added) — absteigend nach Nutzen sortiert
+    ("house_small", "Kleines Wohnhaus", 60),  # 60 Siedler — bevorzugen
+    ("tent",        "Zelt",             15),  # 15 Siedler — Fallback
 ]
 
-# ── Zufriedenheits-Gebäude (billig → teuer) ──────────────────────────────────
+# ── Zufriedenheits-Gebäude (bestes zuerst — für den Legacy-Fallback) ─────────
 HAPPINESS_BUILDINGS: list[tuple[str, str, float]] = [
-    # (building_type, name, satisfaction_bonus_percent)
-    ("outhouse",    "Plumpsklo",      1.0),
-    ("scout_camp",  "Pfadfindercamp", 5.0),
-    ("park",        "Park",           5.0),
-    ("asylum",      "Irrenanstalt",   2.0),
+    # (building_type, name, satisfaction_bonus_percent) — absteigend nach Nutzen
+    ("scout_camp",  "Pfadfindercamp", 5.0),  # 5% — bevorzugen
+    ("park",        "Park",           5.0),  # 5% — bevorzugen
+    ("asylum",      "Irrenanstalt",   2.0),  # 2%
+    ("outhouse",    "Plumpsklo",      1.0),  # 1% — Fallback
 ]
 
 # ── Gebäudetyp → Anzeigename (für Build-Queue-Anzeige) ───────────────────────
@@ -145,6 +145,76 @@ def _research_priority(item: ResearchItem) -> int:
     except ValueError:
         unlocks = len(item.unlocks_buildings) + len(item.unlocks_ships)
         return len(RESEARCH_PRIORITY) + (100 - unlocks) * 1000 + int(item.fp_cost)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Scoring-Engine: wählt das beste Gebäude einer Kategorie anhand von
+#  Nutzen, Bauzeit und Ressourcen-Kosten aus den Live-API-Daten.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Gewicht für Ressourcen-Kosten im Score (kleiner = Bauzeit dominiert stärker).
+# Formel: score = nutzen / max(bauzeit_s, 1)  (Primärer Faktor ist Nutzen/Zeit)
+# Kosten werden nur als Tiebreaker benutzt, da `can_afford` schon filtert.
+
+def _categories_for_resource_rate() -> tuple[str, ...]:
+    """Kategorien, in denen Ressourcen-Produktionsgebäude liegen können."""
+    return ("production", "energy", "economy")
+
+
+def _filter_buildable(
+    buildings: list[BuildingInfo],
+    *,
+    categories: Optional[tuple[str, ...]] = None,
+) -> list[BuildingInfo]:
+    """Liefert nur Gebäude die JETZT gebaut werden können (Ressourcen, Voraussetzungen,
+    Planeten-Typ, kein aktiver Cooldown)."""
+    out: list[BuildingInfo] = []
+    for b in buildings:
+        if categories is not None and b.category not in categories:
+            continue
+        if not b.is_buildable:
+            continue
+        if b.build_time_sec <= 0:
+            continue
+        if cooldown.is_on_cooldown(b.type):
+            continue
+        out.append(b)
+    return out
+
+
+def _score_benefit_per_second(b: BuildingInfo, effect_key: str) -> float:
+    """Nutzen pro Sekunde Bauzeit für einen bestimmten Effekt-Key.
+
+    Gibt 0 zurück wenn das Gebäude diesen Effekt nicht hat, negativ ist,
+    oder keine Bauzeit bekannt ist.
+    """
+    benefit = float(b.next_level_effect.get(effect_key, 0))
+    if benefit <= 0 or b.build_time_sec <= 0:
+        return 0.0
+    return benefit / b.build_time_sec
+
+
+def _pick_best(
+    buildings: list[BuildingInfo],
+    *,
+    effect_key: str,
+    categories: tuple[str, ...],
+) -> Optional[tuple[BuildingInfo, float]]:
+    """Wählt das Gebäude mit dem höchsten Nutzen/Sekunde für ``effect_key``.
+
+    Gibt ``(building, score)`` zurück oder ``None`` wenn kein passender
+    Kandidat verfügbar ist.
+    """
+    candidates: list[tuple[float, BuildingInfo]] = []
+    for b in _filter_buildable(buildings, categories=categories):
+        score = _score_benefit_per_second(b, effect_key)
+        if score > 0:
+            candidates.append((score, b))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    score, best = candidates[0]
+    return best, score
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -239,52 +309,141 @@ class Strategy:
         if storage_action:
             return storage_action
 
-        # 6) Normaler Gebäudebau
+        # 6) Normaler Gebäudebau — beste Ressourcenproduktion steigern
+        action = self._build_best_growth(state)
+        if action:
+            return action
+
+        # 7) Ultimativer Fallback: irgendein baubares Gebäude (alter Pfad)
         logger.info(
-            "%d freie Bauslot(s) — normaler Produktionsbau.",
+            "%d freie Bauslot(s) — nutze Fallback (erstes 'Bauen').",
             state.max_build_slots - len(state.build_queue),
         )
         return Action("build_next_building", {"aggression": self._config.strategy.aggression})
+
+    def _build_best_growth(self, state: GameState) -> Optional[Action]:
+        """Wählt im Normalfall das Gebäude mit der höchsten Effizienz aus.
+
+        Präferiert Produktions-Ressourcen mit niedrigen Beständen / niedrigen
+        Raten — sonst einfach das produktivste Gebäude (beliebiger Ressource)
+        pro Sekunde Bauzeit.
+        """
+        if not state.buildings:
+            return None
+
+        # 1) Priorität auf Ressourcen mit schwacher Rate (aber nicht negativ,
+        #    das hätte _fix_negative_rate schon gefangen)
+        weak_resources: list[tuple[float, str]] = []
+        for resource in ("iron", "steel", "chemicals", "ice", "water",
+                         "energy", "vv4a", "fp"):
+            rate = getattr(state.rates, resource, 0)
+            if rate > 0:
+                weak_resources.append((rate, resource))
+        weak_resources.sort()  # schwächste zuerst
+
+        # 2) Für jede schwache Ressource das beste Produktionsgebäude suchen
+        best_overall: Optional[tuple[float, BuildingInfo, str]] = None
+        for _, resource in weak_resources[:3]:  # nur die 3 schwächsten ansehen
+            picked = _pick_best(
+                state.buildings,
+                effect_key=f"{resource}_rate",
+                categories=_categories_for_resource_rate(),
+            )
+            if not picked:
+                continue
+            b, score = picked
+            if best_overall is None or score > best_overall[0]:
+                best_overall = (score, b, resource)
+
+        if best_overall is None:
+            return None
+
+        score, best, resource = best_overall
+        rate_gain = float(best.next_level_effect.get(f"{resource}_rate", 0))
+        logger.info(
+            "Produktionsbau: '%s' (+%.1f %s/h, %.0fs, Score=%.4f).",
+            best.name, rate_gain, resource, best.build_time_sec, score,
+        )
+        return Action("build_specific", {
+            "building_type": best.type,
+            "building_name": best.name,
+            "reason": f"Produktion {resource} steigern",
+        })
 
     # ──────────────────────────────────────────────────────────────────────
     #  Negative Tendenz fixen (Top-Priorität)
     # ──────────────────────────────────────────────────────────────────────
 
     def _fix_negative_rate(self, state: GameState) -> Optional[Action]:
-        """Wenn eine Rate ≤ 0 ist → passendes Produktionsgebäude bauen.
+        """Wenn eine Ressourcen-Rate ≤ 0 ist → bestes Produktionsgebäude bauen.
 
-        Reihenfolge: schlimmste (negativste) Rate zuerst. Eine Ressource wird
-        übersprungen wenn das Produktionsgebäude bereits in der Bauschlange ist.
+        Reihenfolge: schlimmste (negativste) Rate zuerst. Das beste Gebäude
+        pro Ressource wird anhand der Live-API-Daten gewählt (Nutzen/Sekunde,
+        gefiltert nach Cooldown, Voraussetzungen, leistbar).
         """
+        # Keine Live-Daten → alter Pfad (Fallback für Tests / DOM-Probleme)
+        if not state.buildings:
+            return self._fix_negative_rate_legacy(state)
+
         # Alle Ressourcen + FP prüfen, sortiert nach Rate (negativste zuerst)
+        resources = ("iron", "steel", "chemicals", "ice", "water",
+                     "energy", "vv4a", "fp", "credits")
+        check: list[tuple[float, str]] = []
+        for resource in resources:
+            rate = getattr(state.rates, resource, 0)
+            if rate <= 0:
+                check.append((rate, resource))
+        if not check:
+            return None
+        check.sort()
+
+        for rate, resource in check:
+            rate_key = f"{resource}_rate"
+            picked = _pick_best(
+                state.buildings,
+                effect_key=rate_key,
+                categories=_categories_for_resource_rate(),
+            )
+            if not picked:
+                logger.info(
+                    "Negative %s-Rate (%+.1f/h) — kein baubares %s-Gebäude verfügbar.",
+                    resource, rate, resource,
+                )
+                continue
+            best, score = picked
+            logger.warning(
+                "Negative %s-Rate (%+.1f/h) → baue '%s' "
+                "(+%.1f %s/Bau, %.0fs, Score=%.4f).",
+                resource, rate, best.name,
+                best.next_level_effect.get(rate_key, 0),
+                resource, best.build_time_sec, score,
+            )
+            return Action("build_specific", {
+                "building_type": best.type,
+                "building_name": best.name,
+                "reason": f"{resource} Rate {rate:+.1f}/h",
+            })
+        return None
+
+    def _fix_negative_rate_legacy(self, state: GameState) -> Optional[Action]:
+        """Fallback auf die alte hardcodierte Logik wenn keine Live-Daten da sind."""
         check: list[tuple[float, str]] = []
         for resource in PRODUCTION_BUILDINGS.keys():
             rate = getattr(state.rates, resource, 0)
             if rate <= 0:
                 check.append((rate, resource))
-
         if not check:
             return None
-
-        check.sort()  # negativste zuerst
-
+        check.sort()
         queued_types = {q.building_type for q in state.build_queue}
-
         for rate, resource in check:
             btype, bname = PRODUCTION_BUILDINGS[resource]
             if btype in queued_types:
-                logger.debug("'%s' schon im Bau — überspringe.", bname)
                 continue
             if cooldown.is_on_cooldown(btype):
-                rem = cooldown.remaining_seconds(btype) // 60
-                logger.info(
-                    "'%s' auf Cooldown (noch %d min) — überspringe, suche Alternative.",
-                    bname, rem,
-                )
                 continue
-
             logger.warning(
-                "Negative Tendenz: %s = %+.1f/h → baue '%s' für positiven Trend.",
+                "[Legacy] Negative Tendenz: %s = %+.1f/h → baue '%s'.",
                 resource, rate, bname,
             )
             return Action("build_specific", {
@@ -292,7 +451,6 @@ class Strategy:
                 "building_name": bname,
                 "reason": f"{resource} Rate {rate:+.1f}/h",
             })
-
         return None
 
     # ──────────────────────────────────────────────────────────────────────
@@ -300,38 +458,58 @@ class Strategy:
     # ──────────────────────────────────────────────────────────────────────
 
     def _build_happiness(self, state: GameState, reason: str) -> Optional[Action]:
-        """Baut ein Zufriedenheits-Gebäude. Bevorzugt günstige mit wenig Credits-Verbrauch."""
+        """Baut das effizienteste Zufriedenheits-Gebäude (max. Satisfaction/Sekunde)."""
         logger.warning("Zufriedenheits-Check: %s", reason)
 
-        # Wenn Credits knapp → nur Gebäude ohne Credits-Kosten (Plumpsklo)
         credits_tight = (state.credits_rate < 0 and state.resources.credits < G.credits_warn_balance())
 
-        for btype, bname, bonus in HAPPINESS_BUILDINGS:
-            # Skip credit-heavy buildings when credits are low
-            if credits_tight and btype in ("scout_camp", "park", "asylum"):
-                logger.debug("Überspringe '%s' — Credits knapp.", bname)
-                continue
+        if state.buildings:
+            # Alle sozialen Gebäude mit positivem Zufriedenheits-Effekt
+            candidates: list[tuple[float, BuildingInfo]] = []
+            for b in _filter_buildable(state.buildings, categories=("social",)):
+                benefit = float(b.next_level_effect.get("satisfaction", 0))
+                if benefit <= 0:
+                    continue
+                # Credits-Kosten filter wenn knapp
+                if credits_tight:
+                    credits_cost = float(b.upgrade_cost.get("credits", 0))
+                    credits_drain = float(b.next_level_effect.get("credits_rate", 0))
+                    if credits_cost > 0 or credits_drain < 0:
+                        logger.debug("'%s' — Credits knapp, überspringe.", b.name)
+                        continue
+                score = benefit / max(b.build_time_sec, 1)
+                candidates.append((score, b))
 
-            # Prüfe ob schon im Bau
+            if candidates:
+                candidates.sort(key=lambda x: x[0], reverse=True)
+                score, best = candidates[0]
+                sat_gain = float(best.next_level_effect.get("satisfaction", 0)) * 100
+                logger.info(
+                    "Baue Zufriedenheits-Gebäude: '%s' (+%.1f%%, %.0fs, Score=%.5f) — %s",
+                    best.name, sat_gain, best.build_time_sec, score, reason,
+                )
+                return Action("build_specific", {
+                    "building_type": best.type,
+                    "building_name": best.name,
+                    "reason": f"Zufriedenheit ({state.satisfaction*100:.0f}%)",
+                })
+            logger.warning("Kein baubares Zufriedenheits-Gebäude in den Live-Daten.")
+            return None
+
+        # Legacy-Fallback
+        for btype, bname, bonus in HAPPINESS_BUILDINGS:
+            if credits_tight and btype in ("scout_camp", "park", "asylum"):
+                continue
             if any(q.building_type == btype for q in state.build_queue):
                 continue
-
-            # Cooldown nach wiederholten Fehlversuchen
             if cooldown.is_on_cooldown(btype):
-                rem = cooldown.remaining_seconds(btype) // 60
-                logger.info("'%s' auf Cooldown (noch %d min) — überspringe.", bname, rem)
                 continue
-
-            logger.info(
-                "Baue Zufriedenheits-Gebäude: '%s' (+%.0f%%) — %s",
-                bname, bonus, reason,
-            )
+            logger.info("[Legacy] Baue Zufriedenheits-Gebäude: '%s' (+%.0f%%) — %s", bname, bonus, reason)
             return Action("build_specific", {
                 "building_type": btype,
                 "building_name": bname,
                 "reason": f"Zufriedenheit ({state.satisfaction*100:.0f}%)",
             })
-
         logger.warning("Kein Zufriedenheits-Gebäude verfügbar.")
         return None
 
@@ -340,7 +518,11 @@ class Strategy:
     # ──────────────────────────────────────────────────────────────────────
 
     def _build_housing(self, state: GameState) -> Optional[Action]:
-        """Baut Wohngebäude wenn freie Bevölkerung < 20 % von max."""
+        """Baut das effizienteste Wohngebäude (max. Siedler pro Sekunde Bauzeit).
+
+        Nutzt Live-API-Daten wenn verfügbar — gewählt wird das Gebäude aus
+        Kategorie ``housing`` mit dem höchsten ``population_max/Sekunde``.
+        """
         pct = state.free_pop_ratio * 100
         logger.warning(
             "Bevölkerungs-Check: nur %.0f%% freie Siedler (%d/%d) — Soll: %d–%d%%",
@@ -348,25 +530,40 @@ class Strategy:
             int(G.pop_free_min() * 100), int(G.pop_free_max() * 100),
         )
 
+        if state.buildings:
+            picked = _pick_best(
+                state.buildings,
+                effect_key="population_max",
+                categories=("housing",),
+            )
+            if picked:
+                best, score = picked
+                pop_gain = int(best.next_level_effect.get("population_max", 0))
+                logger.info(
+                    "Baue Wohngebäude: '%s' (+%d Siedler, %.0fs, Score=%.4f) "
+                    "— Freie Bevölkerung zu niedrig.",
+                    best.name, pop_gain, best.build_time_sec, score,
+                )
+                return Action("build_specific", {
+                    "building_type": best.type,
+                    "building_name": best.name,
+                    "reason": f"Bevölkerung ({state.population_free}/{state.population_max} frei)",
+                })
+            logger.warning("Kein baubares Wohngebäude in den Live-Daten gefunden.")
+            return None
+
+        # Legacy-Fallback
         for btype, bname, pop_add in HOUSING_BUILDINGS:
             if any(q.building_type == btype for q in state.build_queue):
                 continue
-
             if cooldown.is_on_cooldown(btype):
-                rem = cooldown.remaining_seconds(btype) // 60
-                logger.info("'%s' auf Cooldown (noch %d min) — überspringe.", bname, rem)
                 continue
-
-            logger.info(
-                "Baue Wohngebäude: '%s' (+%d Einwohner) — Freie Bevölkerung zu niedrig.",
-                bname, pop_add,
-            )
+            logger.info("[Legacy] Baue Wohngebäude: '%s' (+%d)", bname, pop_add)
             return Action("build_specific", {
                 "building_type": btype,
                 "building_name": bname,
                 "reason": f"Bevölkerung ({state.population_free}/{state.population_max} frei)",
             })
-
         logger.warning("Kein Wohngebäude verfügbar.")
         return None
 
@@ -375,47 +572,74 @@ class Strategy:
     # ──────────────────────────────────────────────────────────────────────
 
     def _check_storage(self, state: GameState) -> Optional[Action]:
-        """Gibt eine build_storage-Aktion zurück wenn eine Ressource ≥ 80 % voll ist."""
+        """Baut ein Lager wenn eine Ressource ≥ 80 % voll ist.
+
+        Wählt das effizienteste Lager (max. Kapazität/Sekunde) aus der
+        Kategorie ``storage`` anhand der Live-API-Daten.
+        """
+        # 1) Übervolle Ressourcen identifizieren (sortiert nach Füllstand)
+        overflowing: list[tuple[float, str]] = []
+        for resource in ("iron", "steel", "chemicals", "ice", "water", "energy", "vv4a"):
+            ratio = state.capacity.fill_ratio(resource, state.resources)
+            if ratio >= G.storage_threshold():
+                overflowing.append((ratio, resource))
+        if not overflowing:
+            return None
+        overflowing.sort(reverse=True)
+
+        if state.buildings:
+            # Für jede übervolle Ressource das beste Lager finden
+            for ratio, resource in overflowing:
+                cap_key = f"{resource}_capacity"
+                picked = _pick_best(
+                    state.buildings,
+                    effect_key=cap_key,
+                    categories=("storage",),
+                )
+                if not picked:
+                    continue
+                best, score = picked
+                cap_gain = int(best.next_level_effect.get(cap_key, 0))
+                logger.warning(
+                    "Lager-Alarm: %s %.0f%% voll → baue '%s' "
+                    "(+%d %s-Kapazität, %.0fs, Score=%.4f).",
+                    resource, ratio * 100, best.name, cap_gain,
+                    resource, best.build_time_sec, score,
+                )
+                return Action("build_storage", {
+                    "building_type": best.type,
+                    "building_name": best.name,
+                    "resource": resource,
+                    "fill_ratio": round(ratio, 3),
+                })
+            logger.warning("Lager übervoll aber kein baubares Lager in den Live-Daten.")
+            return None
+
+        # Legacy-Fallback auf hardcodierte Liste
         queued_types = {
             item.building_type for item in state.build_queue
             if "storage" in item.building_type
         }
-
-        overflowing: list[tuple[float, str, str, str]] = []
-        seen_btypes: set[str] = set()
-
-        for resource, (btype, bname) in STORAGE_BUILDINGS.items():
-            if btype in queued_types or btype in seen_btypes:
+        for ratio, resource in overflowing:
+            entry = STORAGE_BUILDINGS.get(resource)
+            if not entry:
+                continue
+            btype, bname = entry
+            if btype in queued_types:
                 continue
             if cooldown.is_on_cooldown(btype):
-                rem = cooldown.remaining_seconds(btype) // 60
-                logger.debug(
-                    "Lager '%s' auf Cooldown (noch %d min) — überspringe.", bname, rem,
-                )
                 continue
-            ratio = state.capacity.fill_ratio(resource, state.resources)
-            if ratio >= G.storage_threshold():
-                overflowing.append((ratio, resource, btype, bname))
-                seen_btypes.add(btype)
-
-        if not overflowing:
-            return None
-
-        overflowing.sort(reverse=True)
-        ratio, resource, btype, bname = overflowing[0]
-
-        warn_parts = [f"{r} {rat*100:.0f}%" for rat, r, _, _ in overflowing]
-        logger.warning(
-            "Lager-Alarm! %d Ressource(n) ≥ %d%%: %s → baue '%s'",
-            len(overflowing), int(G.storage_threshold() * 100),
-            ", ".join(warn_parts), bname,
-        )
-        return Action("build_storage", {
-            "building_type": btype,
-            "building_name": bname,
-            "resource": resource,
-            "fill_ratio": round(ratio, 3),
-        })
+            logger.warning(
+                "[Legacy] Lager-Alarm: %s %.0f%% voll → '%s'",
+                resource, ratio * 100, bname,
+            )
+            return Action("build_storage", {
+                "building_type": btype,
+                "building_name": bname,
+                "resource": resource,
+                "fill_ratio": round(ratio, 3),
+            })
+        return None
 
     # ──────────────────────────────────────────────────────────────────────
     #  Forschung

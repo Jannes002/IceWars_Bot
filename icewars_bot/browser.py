@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from playwright.async_api import async_playwright, Browser, Page, Playwright
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
 
 from .config import Config
 
@@ -15,6 +15,7 @@ class BrowserManager:
         self._config = config
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
+        self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
 
     @property
@@ -30,9 +31,13 @@ class BrowserManager:
             headless=self._config.browser.headless,
             slow_mo=self._config.browser.slow_mo_ms,
         )
-        self._page = await self._browser.new_page(
+        # Eigener Context mit ignore_https_errors, damit self-signed Zertifikate
+        # (z.B. myfritz.net) akzeptiert werden — sonst ERR_CONNECTION_RESET.
+        self._context = await self._browser.new_context(
             viewport=self._config.browser.viewport,
+            ignore_https_errors=True,
         )
+        self._page = await self._context.new_page()
         return self._page
 
     async def restart(self) -> Page:
@@ -41,6 +46,12 @@ class BrowserManager:
         return await self.start()
 
     async def stop(self) -> None:
+        if self._context:
+            try:
+                await self._context.close()
+            except Exception:
+                pass
+            self._context = None
         if self._browser:
             await self._browser.close()
             self._browser = None

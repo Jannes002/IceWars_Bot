@@ -60,6 +60,41 @@ class BuildQueueItem:
 
 
 @dataclass
+class BuildingInfo:
+    """Live-Daten eines baubaren Gebäudes aus /api/city/ → city.buildings.
+
+    ``next_level_effect`` enthält den MARGINALEN Nutzen des nächsten Baus
+    (z.B. ``{"iron_rate": 25, "workers": 5, "eco_points": -1}``), während
+    ``effect`` die kumulierte Wirkung aller bisherigen Instanzen zeigt.
+    """
+    type: str
+    name: str
+    category: str                  # production, storage, energy, housing, social, ...
+    count: int = 0                 # Anzahl bereits gebauter Instanzen
+    level: int = 0
+    upgrade_cost: dict[str, float] = field(default_factory=dict)
+    worker_cost: int = 0           # benötigte freie Bevölkerung
+    build_time_sec: int = 0
+    can_afford: bool = False
+    reqs_met: bool = False
+    p_restricted: bool = False     # Planet-Typ erlaubt dieses Gebäude nicht
+    research_missing: bool = False
+    in_queue: bool = False         # gerade in der Bauwarteschlange
+    effect: dict[str, float] = field(default_factory=dict)
+    next_level_effect: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def is_buildable(self) -> bool:
+        """True wenn das Gebäude *jetzt* gebaut werden kann."""
+        return (
+            self.can_afford
+            and self.reqs_met
+            and not self.p_restricted
+            and not self.research_missing
+        )
+
+
+@dataclass
 class ActiveResearch:
     """Laufende Forschung mit Restzeit."""
     type: str
@@ -95,6 +130,7 @@ class GameState:
     build_slots: int = 0
     max_build_slots: int = 2
     build_queue: list[BuildQueueItem] = field(default_factory=list)
+    buildings: list[BuildingInfo] = field(default_factory=list)
     research: list[ResearchItem] = field(default_factory=list)
     active_research: Optional[ActiveResearch] = None
     research_lab_busy: bool = False
@@ -175,6 +211,27 @@ def parse_state(raw: dict[str, Any]) -> GameState:
         for b in city.get("build_queue", [])
     ]
 
+    buildings = [
+        BuildingInfo(
+            type=str(b.get("type", "")),
+            name=str(b.get("name", "")),
+            category=str(b.get("category", "")),
+            count=int(b.get("count", 0)),
+            level=int(b.get("level", 0)),
+            upgrade_cost={k: float(v) for k, v in (b.get("upgrade_cost") or {}).items()},
+            worker_cost=int(b.get("worker_cost", 0)),
+            build_time_sec=int(b.get("build_time_sec", 0)),
+            can_afford=bool(b.get("can_afford", False)),
+            reqs_met=bool(b.get("reqs_met", False)),
+            p_restricted=bool(b.get("p_restricted", False)),
+            research_missing=bool(b.get("research_missing", False)),
+            in_queue=bool(b.get("in_queue", False)),
+            effect={k: float(v) for k, v in (b.get("effect") or {}).items()},
+            next_level_effect={k: float(v) for k, v in (b.get("next_level_effect") or {}).items()},
+        )
+        for b in (city.get("buildings") or [])
+    ]
+
     # Forschungsliste mit allen relevanten Feldern
     research = [
         ResearchItem(
@@ -217,6 +274,7 @@ def parse_state(raw: dict[str, Any]) -> GameState:
         build_slots=int(city.get("build_slots_used", 0)),
         max_build_slots=int(city.get("max_parallel_builds", 2)),
         build_queue=build_queue,
+        buildings=buildings,
         research=research,
         active_research=active_research,
         research_lab_busy=research_lab_busy,
