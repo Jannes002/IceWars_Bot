@@ -9,9 +9,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import ssl
 import urllib.error
 import urllib.request
 from typing import Optional
+
+# Telegram-API nutzt gültige Zertifikate, aber auf Windows schlägt die
+# Verifikation manchmal wegen fehlender/veralteter CA-Ketten fehl.
+# Wir deaktivieren die Verifikation nur für diesen einen Endpunkt.
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +59,7 @@ class TelegramNotifier:
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
             resp.read()
 
 
