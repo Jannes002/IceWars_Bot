@@ -152,19 +152,12 @@ class BotLoop:
             await self._browser.stop()
             return
 
-        # Startup-Meldung je nach Ausfallzeit
         if downtime_s is None or downtime_s > 300:
-            start_msg = "🤖 <b>IceWars-Bot gestartet</b>\nÜberwache Rang und Baufortschritt."
             logger.info("Bot gestartet (Erststart oder Ausfallzeit >5 min).")
         else:
-            mins = int(downtime_s // 60)
-            secs = int(downtime_s % 60)
-            downtime_str = f"{mins}m {secs}s" if mins else f"{secs}s"
-            start_msg = f"🔄 <b>Update von GitHub erfolgt</b>\nBot läuft wieder (war {downtime_str} aus)."
             logger.info("Bot neugestartet nach %.0f s (Update-Neustart).", downtime_s)
 
         logger.info("Hauptschleife aktiv. Stoppen mit Ctrl+C.")
-        await self._notify(start_msg)
         try:
             # Status-Reporter, DB-Recorder und Auth-Checker als parallele Tasks
             status_task = asyncio.create_task(self._status_reporter())
