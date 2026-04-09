@@ -132,6 +132,7 @@ class BotLoop:
         self._last_rank: Optional[int] = None          # letzter bekannter Rang (Gesamtpunkte)
         self._last_queue: list[BuildQueueItem] = []    # Bauwarteschlange vorherige Runde
         self._low_resources: set[str] = set()          # Ressourcen unter 15%-Schwelle (bereits gemeldet)
+        self._donated_resources: set[str] = set()      # Ressourcen über 95%-Schwelle (Spende bereits ausgelöst)
 
     async def run(self) -> None:
         logger.info("Bot startet...")
@@ -305,9 +306,12 @@ class BotLoop:
         "energy":    "Energie ⚡",
         "vv4a":      "VV4A 💎",
     }
-    _RES_LOW_THRESHOLD  = 0.15   # Alarm senden wenn unter 15 %
-    _RES_OK_THRESHOLD   = 0.20   # Entwarnung wenn wieder über 20 %
-    _RES_CHECK_INTERVAL = 180    # Prüfintervall: 3 Minuten
+    _RES_LOW_THRESHOLD    = 0.15   # Alarm senden wenn unter 15 %
+    _RES_OK_THRESHOLD     = 0.20   # Entwarnung wenn wieder über 20 %
+    _RES_HIGH_THRESHOLD   = 0.95   # Spende auslösen wenn über 95 %
+    _RES_DONATE_RESET     = 0.85   # Spende wieder erlaubt wenn unter 85 % gefallen
+    _RES_DONATE_FRACTION  = 0.10   # 10 % des aktuellen Bestands spenden
+    _RES_CHECK_INTERVAL   = 180    # Prüfintervall: 3 Minuten
 
     async def _resource_monitor(self) -> None:
         """Prüft alle 3 Minuten ob eine Ressource unter 15 % der Lagerkapazität sinkt.
@@ -329,15 +333,18 @@ class BotLoop:
 
             current_val = int(getattr(state.resources, res, 0))
             cap_val = int(getattr(state.capacity, res, 0))
+            rate_val = float(getattr(state.rates, res, 0))
             pct = int(ratio * 100)
+            rate_str = f"{rate_val:+,.0f}/h"
 
+            # ── Niedriger Füllstand (<15 %) ──────────────────────────────
             if ratio < self._RES_LOW_THRESHOLD and res not in self._low_resources:
-                # Neu unter 15 % → Alarm
                 self._low_resources.add(res)
                 logger.warning("Ressource niedrig: %s %.0f%%", res, ratio * 100)
                 await self._notify(
                     f"📉 <b>Lager fast leer: {label}</b>\n"
-                    f"{current_val:,} / {cap_val:,}  ({pct} %)"
+                    f"{current_val:,} / {cap_val:,}  ({pct} %)\n"
+                    f"Produktion: {rate_str}"
                 )
 
             elif ratio >= self._RES_OK_THRESHOLD and res in self._low_resources:
@@ -346,8 +353,36 @@ class BotLoop:
                 logger.info("Ressource erholt: %s %.0f%%", res, ratio * 100)
                 await self._notify(
                     f"📈 <b>Lager wieder gefüllt: {label}</b>\n"
-                    f"{current_val:,} / {cap_val:,}  ({pct} %)"
+                    f"{current_val:,} / {cap_val:,}  ({pct} %)\n"
+                    f"Produktion: {rate_str}"
                 )
+
+            # ── Hoher Füllstand (>95 %) → Allianz-Spende ─────────────────
+            if ratio > self._RES_HIGH_THRESHOLD and res not in self._donated_resources:
+                donate_amount = int(current_val * self._RES_DONATE_FRACTION)
+                if donate_amount <= 0:
+                    continue
+                self._donated_resources.add(res)
+                logger.info("Allianz-Spende: %s %d (%.0f%% voll)", res, donate_amount, pct)
+                result = await self._scraper.donate_to_alliance(res, donate_amount)
+                if "_error" in result:
+                    logger.warning("Spende fehlgeschlagen (%s): HTTP %s", res, result.get("_error"))
+                    await self._notify(
+                        f"⚠️ <b>Spende fehlgeschlagen: {label}</b>\n"
+                        f"Versuchte Spende: {donate_amount:,}\n"
+                        f"API-Fehler: HTTP {result.get('_error')}"
+                    )
+                else:
+                    await self._notify(
+                        f"🤝 <b>Allianz-Spende: {label}</b>\n"
+                        f"{donate_amount:,} gespendet  (Lager war {pct} % voll)\n"
+                        f"Produktion: {rate_str}"
+                    )
+
+            elif ratio < self._RES_DONATE_RESET and res in self._donated_resources:
+                # Unter 85 % gefallen → Spende wieder erlauben
+                self._donated_resources.discard(res)
+                logger.debug("Spende-Reset: %s (%.0f%%)", res, ratio * 100)
 
     async def _telegram_listener(self) -> None:
         """Long-polling für Telegram-Befehle (/stop, /start).
