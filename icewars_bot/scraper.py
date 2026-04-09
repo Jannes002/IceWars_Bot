@@ -3,12 +3,38 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time as _time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from playwright.async_api import Page
 
 logger = logging.getLogger(__name__)
+
+# ── TTL-Cache für selten ändernde API-Daten ───────────────────────────────────
+# key → (data, expires_at_monotonic)
+_cache: dict[str, tuple[Any, float]] = {}
+
+_CACHE_TTL: dict[str, float] = {
+    "research":  30 * 60,   # 30 Minuten (Forschung ändert sich selten)
+    "highscore": 15 * 60,   # 15 Minuten pro Kategorie (4 Endpunkte)
+}
+
+
+def _cache_get(key: str) -> Optional[Any]:
+    entry = _cache.get(key)
+    if entry is None:
+        return None
+    data, expires = entry
+    if _time.monotonic() > expires:
+        del _cache[key]
+        return None
+    return data
+
+
+def _cache_set(key: str, data: Any, ttl: float) -> None:
+    _cache[key] = (data, _time.monotonic() + ttl)
+
 
 _API_JS = """
 async (endpoint) => {
@@ -319,7 +345,14 @@ class GameScraper:
             logger.error("API /city/ Fehler: HTTP %s", city.get("_error", "?"))
             return {}
 
-        research_data = await self._api_get("/api/research/")
+        research_data = _cache_get("research")
+        if research_data is None:
+            research_data = await self._api_get("/api/research/")
+            if "_error" not in research_data:
+                _cache_set("research", research_data, _CACHE_TTL["research"])
+                logger.debug("Research-Daten gecacht (TTL 30 min)")
+            else:
+                research_data = {}
         research = research_data.get("research", []) if isinstance(research_data, dict) else []
 
         # Bauwarteschlange aus dem DOM anreichern (Namen + Restzeit)
@@ -399,14 +432,21 @@ class GameScraper:
         else:
             logger.debug("Labor frei — keine aktive Forschung.")
 
-        # Highscore-Daten holen (alle Kategorien)
+        # Highscore-Daten holen (alle Kategorien) — gecacht für 15 Minuten
         highscore = {}
         for category in ("points", "research", "fleet", "economy"):
-            hs = await self._api_get(f"/api/highscore?category={category}")
-            if "_error" not in hs:
+            cache_key = f"highscore_{category}"
+            hs = _cache_get(cache_key)
+            if hs is None:
+                hs = await self._api_get(f"/api/highscore?category={category}")
+                if "_error" not in hs:
+                    _cache_set(cache_key, hs, _CACHE_TTL["highscore"])
+                    logger.debug("Highscore '%s' gecacht (TTL 15 min)", category)
+                else:
+                    logger.debug("Highscore '%s' nicht verfügbar: %s", category, hs)
+                    hs = {}
+            if hs:
                 highscore[category] = hs
-            else:
-                logger.debug("Highscore '%s' nicht verfügbar: %s", category, hs)
 
         raw = {
             "city": city,

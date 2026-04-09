@@ -76,6 +76,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 ts.set_paused(False)
                 logger.info("Bot fortgesetzt via Dashboard.")
                 self._json_response({"paused": False})
+            elif parsed.path == "/api/execute":
+                success = ts.request_execute()
+                if success:
+                    logger.info("Execute-Anfrage vom Dashboard.")
+                    self._json_response({"queued": True})
+                else:
+                    self._json_response(
+                        {"queued": False, "reason": "Keine empfohlene Aktion oder bereits ausstehend"},
+                        400,
+                    )
+            elif parsed.path == "/api/execute/donate":
+                resource = data.get("resource", "")
+                amount = int(data.get("amount", 0))
+                if not resource or amount <= 0:
+                    self._json_response({"error": "resource und amount erforderlich"}, 400)
+                else:
+                    ts.request_donate(resource, amount)
+                    logger.info("Donate-Anfrage vom Dashboard: %s=%d", resource, amount)
+                    self._json_response({"queued": True})
             else:
                 self.send_error(404, "Not Found")
         except Exception as e:

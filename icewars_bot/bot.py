@@ -170,7 +170,14 @@ class BotLoop:
             try:
                 while True:
                     await self._run_turn()
-                    await asyncio.sleep(self._config.bot.turn_delay_s)
+                    # Warte turn_delay_s Sekunden, aber prüfe jede Sekunde auf
+                    # Dashboard-Anfragen für schnelle Reaktion (≤1s)
+                    delay = int(self._config.bot.turn_delay_s)
+                    for _ in range(delay):
+                        await asyncio.sleep(1)
+                        if ts.has_execute_request() or ts.has_donate_request():
+                            logger.debug("Vorzeitiger Wake-up durch Dashboard-Anfrage")
+                            break
             finally:
                 for t in (status_task, db_task, auth_task, daily_task, tg_task, res_task):
                     t.cancel()
@@ -357,31 +364,25 @@ class BotLoop:
                     f"Produktion: {rate_str}"
                 )
 
-            # ── Hoher Füllstand (>95 %) → Allianz-Spende ─────────────────
+            # ── Hoher Füllstand (>95 %) → Spendenempfehlung ins Dashboard ──
             if ratio > self._RES_HIGH_THRESHOLD and res not in self._donated_resources:
                 donate_amount = int(current_val * self._RES_DONATE_FRACTION)
                 if donate_amount <= 0:
                     continue
                 self._donated_resources.add(res)
-                logger.info("Allianz-Spende: %s %d (%.0f%% voll)", res, donate_amount, pct)
-                result = await self._scraper.donate_to_alliance(res, donate_amount)
-                if "_error" in result:
-                    logger.warning("Spende fehlgeschlagen (%s): HTTP %s", res, result.get("_error"))
-                    await self._notify(
-                        f"⚠️ <b>Spende fehlgeschlagen: {label}</b>\n"
-                        f"Versuchte Spende: {donate_amount:,}\n"
-                        f"API-Fehler: HTTP {result.get('_error')}"
-                    )
-                else:
-                    await self._notify(
-                        f"🤝 <b>Allianz-Spende: {label}</b>\n"
-                        f"{donate_amount:,} gespendet  (Lager war {pct} % voll)\n"
-                        f"Produktion: {rate_str}"
-                    )
+                logger.info("Allianz-Spende empfohlen: %s %d (%.0f%% voll)", res, donate_amount, pct)
+                ts.add_donate_recommended(res, donate_amount, label, pct)
+                await self._notify(
+                    f"⚠️ <b>Lager fast voll: {label}</b>\n"
+                    f"{current_val:,} / {cap_val:,}  ({pct} %)\n"
+                    f"Empfohlene Spende: {donate_amount:,}\n"
+                    f"Im Dashboard bestätigen."
+                )
 
             elif ratio < self._RES_DONATE_RESET and res in self._donated_resources:
-                # Unter 85 % gefallen → Spende wieder erlauben
+                # Unter 85 % gefallen → Empfehlung zurückziehen
                 self._donated_resources.discard(res)
+                ts.clear_donate_recommended(res)
                 logger.debug("Spende-Reset: %s (%.0f%%)", res, ratio * 100)
 
     async def _telegram_listener(self) -> None:
@@ -547,6 +548,70 @@ class BotLoop:
                 logger.info("Gebäude fertig: '%s' (finish_time=%s)", name, item.finish_time)
                 await self._notify(f"🏗️ <b>Gebäude fertiggestellt!</b>\n{name}")
 
+    async def _execute_requested_action_if_pending(self) -> None:
+        """Führt eine vom Dashboard angeforderte Aktion aus."""
+        action_dict = ts.consume_execute_request()
+        if action_dict is None:
+            return
+
+        action = Action(type=action_dict["type"], params=action_dict.get("params", {}))
+        task = _action_to_task(action)
+        ts.set_running(task)
+        logger.info("Dashboard-Ausführung: %s", action)
+
+        try:
+            success = await self._executor.execute(action)
+            ts.set_done(task, success)
+            ts.set_execute_result("ok" if success else "fehlgeschlagen")
+
+            btype = action.params.get("building_type", "") if action.type in (
+                "build_specific", "build_storage"
+            ) else ""
+
+            if success:
+                self._stats.actions_executed += 1
+                self._record_action_event(action)
+                if btype:
+                    cooldown.record_success(btype)
+                ts.set_recommended_action(None)
+            else:
+                self._stats.actions_failed += 1
+                logger.warning("Dashboard-Aktion fehlgeschlagen: %s", action)
+                if btype:
+                    cooldown.record_failure(btype, reason=action.params.get("reason", ""))
+
+            await asyncio.sleep(self._config.bot.action_delay_ms / 1000)
+
+        except Exception as e:
+            ts.set_execute_result(f"Fehler: {type(e).__name__}")
+            logger.error("Dashboard-Ausführung fehlgeschlagen: %s", type(e).__name__)
+
+    async def _execute_donate_request_if_pending(self) -> None:
+        """Führt eine vom Dashboard angeforderte Allianz-Spende aus."""
+        donate_req = ts.consume_donate_request()
+        if donate_req is None:
+            return
+
+        resource = donate_req["resource"]
+        amount = donate_req["amount"]
+        label = self._MONITORED_RESOURCES.get(resource, resource)
+        logger.info("Dashboard-Spende: %s %d", resource, amount)
+
+        result = await self._scraper.donate_to_alliance(resource, amount)
+        if "_error" in result:
+            logger.warning("Dashboard-Spende fehlgeschlagen (%s): HTTP %s", resource, result.get("_error"))
+            await self._notify(
+                f"⚠️ <b>Spende fehlgeschlagen: {label}</b>\n"
+                f"Versuchte Spende: {amount:,}\n"
+                f"API-Fehler: HTTP {result.get('_error')}"
+            )
+        else:
+            ts.clear_donate_recommended(resource)
+            await self._notify(
+                f"🤝 <b>Allianz-Spende: {label}</b>\n"
+                f"{amount:,} gespendet (via Dashboard)"
+            )
+
     async def _run_turn(self) -> None:
         try:
             raw = await self._scraper.scrape()
@@ -586,6 +651,10 @@ class BotLoop:
             ts.update_game_queue(state.build_queue, state.active_research)
             ts.tick(self._stats.turns_completed + 1)
 
+            # Dashboard-Ausführungsanfragen IMMER prüfen (auch wenn pausiert)
+            await self._execute_requested_action_if_pending()
+            await self._execute_donate_request_if_pending()
+
             # Wenn Bot pausiert: keine Entscheidungen treffen, nur protokollieren
             if ts.is_paused():
                 logger.info("Bot pausiert — Runde %d übersprungen.", self._stats.turns_completed + 1)
@@ -595,29 +664,18 @@ class BotLoop:
             actions = self._strategy.decide(state)
             ts.update_planned([_action_to_task(a) for a in actions])
 
-            for action in actions:
-                task = _action_to_task(action)
-                ts.set_running(task)
-                success = await self._executor.execute(action)
-                ts.set_done(task, success)
-
-                # Cooldown-Tracking für gebäudespezifische Aktionen
-                btype = action.params.get("building_type", "") if action.type in (
-                    "build_specific", "build_storage"
-                ) else ""
-
-                if success:
-                    self._stats.actions_executed += 1
-                    # Bau- und Forschungsstarts in der DB festhalten
-                    self._record_action_event(action)
-                    if btype:
-                        cooldown.record_success(btype)
-                else:
-                    self._stats.actions_failed += 1
-                    logger.warning("Aktion fehlgeschlagen: %s", action)
-                    if btype:
-                        cooldown.record_failure(btype, reason=action.params.get("reason", ""))
-                await asyncio.sleep(self._config.bot.action_delay_ms / 1000)
+            # Aktionen NICHT ausführen — erste Aktion als Empfehlung im Dashboard anzeigen
+            if actions:
+                first = actions[0]
+                first_task = _action_to_task(first)
+                ts.set_recommended_action({
+                    "type": first.type,
+                    "params": dict(first.params),
+                    "label": first_task.label,
+                    "reason": first_task.reason,
+                })
+            else:
+                ts.set_recommended_action(None)
 
             self._stats.turns_completed += 1
             self._consecutive_failures = 0

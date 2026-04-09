@@ -26,7 +26,7 @@ class BrowserConfig:
 
 @dataclass
 class BotConfig:
-    turn_delay_s: float = 5.0
+    turn_delay_s: float = 60.0
     action_delay_ms: int = 400
     max_retries: int = 3
 
@@ -65,7 +65,7 @@ class Config:
         )
         bot_data = data.get("bot", {})
         bot = BotConfig(
-            turn_delay_s=bot_data.get("turn_delay_s", 5.0),
+            turn_delay_s=bot_data.get("turn_delay_s", 60.0),
             action_delay_ms=bot_data.get("action_delay_ms", 400),
             max_retries=bot_data.get("max_retries", 3),
         )

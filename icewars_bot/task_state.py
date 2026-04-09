@@ -50,6 +50,24 @@ class BotTaskState:
     last_error: str = ""
     paused: bool = False
 
+    # Empfohlene Aktion (statt sofortiger Ausführung)
+    recommended_action: Optional[dict] = None
+
+    # Execute-Anfrage: gesetzt vom Dashboard, gelesen vom Bot-Loop
+    execute_requested: bool = False
+    execute_action: Optional[dict] = None  # Kopie von recommended_action zum Ausführen
+
+    # Ergebnis der letzten Ausführung: "ok" oder Fehlermeldung
+    last_execute_result: Optional[str] = None
+
+    # Spendenempfehlungen: Liste von pending-Spenden (gesetzt von _resource_monitor)
+    # Jeder Eintrag: {"resource": str, "amount": int, "label": str, "pct": int}
+    donate_recommended: list = field(default_factory=list)
+
+    # Spenden-Ausführungsanfragen (vom Dashboard getriggert)
+    # Jeder Eintrag: {"resource": str, "amount": int}
+    donate_requests: list = field(default_factory=list)
+
     def to_dict(self) -> dict:
         return {
             "bot_status": self.bot_status,
@@ -81,6 +99,10 @@ class BotTaskState:
                 }
                 for q in self.game_queue
             ],
+            "recommended_action": self.recommended_action,
+            "execute_requested": self.execute_requested,
+            "last_execute_result": self.last_execute_result,
+            "donate_recommended": list(self.donate_recommended),
         }
 
 
@@ -169,3 +191,84 @@ def set_paused(paused: bool) -> None:
     with _lock:
         _state.paused = paused
         _state.bot_status = "paused" if paused else "running"
+
+
+# ── Empfohlene Aktion + Execute-Request ──────────────────────────────────────
+
+def set_recommended_action(action_dict: Optional[dict]) -> None:
+    """Setzt die empfohlene Aktion (vom Bot-Loop, nach strategy.decide)."""
+    with _lock:
+        _state.recommended_action = action_dict
+
+
+def request_execute() -> bool:
+    """Vom Dashboard aufgerufen. Kopiert recommended_action → execute_action, setzt Flag.
+
+    Gibt False zurück wenn keine Empfehlung verfügbar oder bereits eine Anfrage läuft.
+    """
+    with _lock:
+        if _state.recommended_action is None or _state.execute_requested:
+            return False
+        _state.execute_action = dict(_state.recommended_action)
+        _state.execute_requested = True
+        return True
+
+
+def has_execute_request() -> bool:
+    with _lock:
+        return _state.execute_requested
+
+
+def consume_execute_request() -> Optional[dict]:
+    """Vom Bot-Loop aufgerufen. Gibt execute_action zurück und löscht Flag."""
+    with _lock:
+        if not _state.execute_requested:
+            return None
+        action = _state.execute_action
+        _state.execute_requested = False
+        _state.execute_action = None
+        return action
+
+
+def set_execute_result(result: str) -> None:
+    with _lock:
+        _state.last_execute_result = result
+
+
+# ── Spendenempfehlungen + Donate-Requests ────────────────────────────────────
+
+def add_donate_recommended(resource: str, amount: int, label: str, pct: int) -> None:
+    """Fügt eine Spendenempfehlung hinzu (oder ersetzt vorhandene für diese Ressource)."""
+    with _lock:
+        _state.donate_recommended = [
+            d for d in _state.donate_recommended if d["resource"] != resource
+        ]
+        _state.donate_recommended.append(
+            {"resource": resource, "amount": amount, "label": label, "pct": pct}
+        )
+
+
+def clear_donate_recommended(resource: str) -> None:
+    with _lock:
+        _state.donate_recommended = [
+            d for d in _state.donate_recommended if d["resource"] != resource
+        ]
+
+
+def request_donate(resource: str, amount: int) -> None:
+    """Vom Dashboard aufgerufen. Stellt eine Spendenanforderung in die Queue."""
+    with _lock:
+        _state.donate_requests.append({"resource": resource, "amount": amount})
+
+
+def consume_donate_request() -> Optional[dict]:
+    """Vom Bot-Loop aufgerufen. Gibt das erste pending Spendenrequest zurück."""
+    with _lock:
+        if not _state.donate_requests:
+            return None
+        return _state.donate_requests.pop(0)
+
+
+def has_donate_request() -> bool:
+    with _lock:
+        return len(_state.donate_requests) > 0

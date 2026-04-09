@@ -359,6 +359,30 @@
 
     </div>
 
+    <!-- ── Empfohlene Aktion + Spendenempfehlungen ──────────────────────── -->
+    <div id="action-panel" style="display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:0 24px 10px;">
+
+        <!-- Empfohlene Aktion -->
+        <div class="chart-card" style="padding:14px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                <h3 style="margin:0;">Empfohlene Aktion</h3>
+                <span id="execute-result" style="font-size:0.75rem;"></span>
+            </div>
+            <div id="recommended-action-content">
+                <div style="color:var(--text-dim); font-size:0.82rem;">Keine Empfehlung verfügbar.</div>
+            </div>
+        </div>
+
+        <!-- Spendenempfehlungen -->
+        <div class="chart-card" style="padding:14px;">
+            <h3 style="margin-bottom:10px;">Spendenempfehlungen</h3>
+            <div id="donate-recommendations">
+                <div style="color:var(--text-dim); font-size:0.82rem;">Alle Lager unter 95 %.</div>
+            </div>
+        </div>
+
+    </div>
+
     <!-- Bau- & Forschungshistorie -->
     <div class="chart-card" style="margin:18px 0; padding:16px;">
         <h3 style="margin-bottom:12px;">Bau- &amp; Forschungshistorie</h3>
@@ -1218,6 +1242,114 @@ function renderTaskPanel(data) {
         queueDiv.innerHTML += `<div style="color:var(--danger); font-size:0.78rem; margin-top:8px;">
             Letzter Fehler: ${data.last_error}</div>`;
     }
+
+    // Empfohlene Aktion + Spendenempfehlungen
+    renderRecommendedAction(data.recommended_action, data.last_execute_result);
+    renderDonateRecommendations(data.donate_recommended || []);
+}
+
+// ── Empfohlene Aktion ─────────────────────────────────────────────────────
+
+async function executeAction() {
+    const btn = document.getElementById('execute-btn');
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch('/api/execute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        });
+        const json = await res.json();
+        const resultEl = document.getElementById('execute-result');
+        if (!res.ok) {
+            if (resultEl) { resultEl.textContent = json.reason || 'Fehler'; resultEl.style.color = 'var(--danger)'; }
+        } else {
+            if (resultEl) { resultEl.textContent = 'Anfrage gesendet…'; resultEl.style.color = 'var(--accent2)'; }
+            setTimeout(loadTasks, 2000);
+        }
+    } catch (e) {
+        const resultEl = document.getElementById('execute-result');
+        if (resultEl) { resultEl.textContent = 'Verbindungsfehler'; resultEl.style.color = 'var(--danger)'; }
+    }
+    if (btn) btn.disabled = false;
+}
+
+function renderRecommendedAction(action, lastResult) {
+    const el = document.getElementById('recommended-action-content');
+    if (!el) return;
+
+    const resultEl = document.getElementById('execute-result');
+    if (resultEl && lastResult) {
+        resultEl.textContent = lastResult === 'ok' ? '✓ Ausgeführt' : lastResult;
+        resultEl.style.color = lastResult === 'ok' ? 'var(--accent2)' : 'var(--danger)';
+    }
+
+    if (!action) {
+        el.innerHTML = '<div style="color:var(--text-dim); font-size:0.82rem;">Keine Empfehlung verfügbar.</div>';
+        return;
+    }
+
+    const icon = ACTION_ICONS[action.type] || '⚙️';
+    el.innerHTML = `
+        <div class="task-item" style="border:none; padding-bottom:12px;">
+            <span class="task-icon">${icon}</span>
+            <div style="flex:1">
+                <div class="task-label">${action.label || action.type}</div>
+                ${action.reason ? `<div class="task-reason">${action.reason}</div>` : ''}
+            </div>
+        </div>
+        <button id="execute-btn" onclick="executeAction()"
+            style="width:100%; background:var(--accent); color:#000; border:none;
+                   padding:8px 16px; border-radius:6px; font-weight:600;
+                   cursor:pointer; font-size:0.88rem;">
+            ▶ Ausführen
+        </button>`;
+}
+
+// ── Spendenempfehlungen ────────────────────────────────────────────────────
+
+const RES_ICONS = {
+    iron: '⛏', steel: '🔩', chemicals: '🧪', ice: '🧊',
+    water: '💧', energy: '⚡', vv4a: '💎',
+};
+
+async function executeDonate(resource, amount) {
+    try {
+        const res = await fetch('/api/execute/donate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ resource, amount }),
+        });
+        if (res.ok) setTimeout(loadTasks, 1500);
+    } catch (e) {
+        console.error('Donate fehlgeschlagen:', e);
+    }
+}
+
+function renderDonateRecommendations(recommendations) {
+    const el = document.getElementById('donate-recommendations');
+    if (!el) return;
+    if (!recommendations.length) {
+        el.innerHTML = '<div style="color:var(--text-dim); font-size:0.82rem;">Alle Lager unter 95 %.</div>';
+        return;
+    }
+    el.innerHTML = recommendations.map(d => `
+        <div style="display:flex; align-items:center; gap:10px; padding:6px 0;
+                    border-bottom:1px solid #1e2130; font-size:0.85rem;">
+            <span>${RES_ICONS[d.resource] || '📦'}</span>
+            <div style="flex:1">
+                <div style="font-weight:500;">${d.label}</div>
+                <div style="color:var(--text-dim); font-size:0.78rem;">
+                    ${d.pct} % voll — ${formatNum(d.amount)} spenden
+                </div>
+            </div>
+            <button onclick="executeDonate('${d.resource}', ${d.amount})"
+                style="background:var(--accent3); color:#000; border:none;
+                       padding:4px 12px; border-radius:5px; cursor:pointer;
+                       font-size:0.78rem; font-weight:600;">
+                Spenden
+            </button>
+        </div>`).join('');
 }
 
 // ── Build / Research History ───────────────────────────────────────────────
