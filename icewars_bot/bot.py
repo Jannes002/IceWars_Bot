@@ -131,6 +131,7 @@ class BotLoop:
         self._tg: Optional[TelegramNotifier] = make_notifier(config)
         self._last_rank: Optional[int] = None          # letzter bekannter Rang (Gesamtpunkte)
         self._last_queue: list[BuildQueueItem] = []    # Bauwarteschlange vorherige Runde
+        self._low_resources: set[str] = set()          # Ressourcen unter 15%-Schwelle (bereits gemeldet)
 
     async def run(self) -> None:
         logger.info("Bot startet...")
@@ -171,12 +172,13 @@ class BotLoop:
             auth_task = asyncio.create_task(self._auth_checker())
             daily_task = asyncio.create_task(self._daily_reporter())
             tg_task = asyncio.create_task(self._telegram_listener())
+            res_task = asyncio.create_task(self._resource_monitor())
             try:
                 while True:
                     await self._run_turn()
                     await asyncio.sleep(self._config.bot.turn_delay_s)
             finally:
-                for t in (status_task, db_task, auth_task, daily_task, tg_task):
+                for t in (status_task, db_task, auth_task, daily_task, tg_task, res_task):
                     t.cancel()
                     try:
                         await t
@@ -300,6 +302,60 @@ class BotLoop:
         if len(msg) > 4000:
             msg = msg[:3990] + "\n…(Liste gekürzt)"
         await self._notify(msg)
+
+    # Ressourcen-Monitoring je Ressource mit Kapazität
+    _MONITORED_RESOURCES: dict[str, str] = {
+        "iron":      "Eisen ⛏",
+        "steel":     "Stahl 🔩",
+        "chemicals": "Chemikalien 🧪",
+        "ice":       "Eis 🧊",
+        "water":     "Wasser 💧",
+        "energy":    "Energie ⚡",
+        "vv4a":      "VV4A 💎",
+    }
+    _RES_LOW_THRESHOLD  = 0.15   # Alarm senden wenn unter 15 %
+    _RES_OK_THRESHOLD   = 0.20   # Entwarnung wenn wieder über 20 %
+    _RES_CHECK_INTERVAL = 180    # Prüfintervall: 3 Minuten
+
+    async def _resource_monitor(self) -> None:
+        """Prüft alle 3 Minuten ob eine Ressource unter 15 % der Lagerkapazität sinkt.
+
+        Sendet einmalig Alarm — wartet auf Erholung über 20 %, dann erst wieder.
+        """
+        while True:
+            await asyncio.sleep(self._RES_CHECK_INTERVAL)
+            state = self._last_state
+            if state is None:
+                continue
+            await self._check_resource_levels(state)
+
+    async def _check_resource_levels(self, state) -> None:
+        for res, label in self._MONITORED_RESOURCES.items():
+            ratio = state.capacity.fill_ratio(res, state.resources)
+            if ratio <= 0:
+                continue  # keine Kapazitätsdaten → überspringen
+
+            current_val = int(getattr(state.resources, res, 0))
+            cap_val = int(getattr(state.capacity, res, 0))
+            pct = int(ratio * 100)
+
+            if ratio < self._RES_LOW_THRESHOLD and res not in self._low_resources:
+                # Neu unter 15 % → Alarm
+                self._low_resources.add(res)
+                logger.warning("Ressource niedrig: %s %.0f%%", res, ratio * 100)
+                await self._notify(
+                    f"📉 <b>Lager fast leer: {label}</b>\n"
+                    f"{current_val:,} / {cap_val:,}  ({pct} %)"
+                )
+
+            elif ratio >= self._RES_OK_THRESHOLD and res in self._low_resources:
+                # Wieder über 20 % → Entwarnung
+                self._low_resources.discard(res)
+                logger.info("Ressource erholt: %s %.0f%%", res, ratio * 100)
+                await self._notify(
+                    f"📈 <b>Lager wieder gefüllt: {label}</b>\n"
+                    f"{current_val:,} / {cap_val:,}  ({pct} %)"
+                )
 
     async def _telegram_listener(self) -> None:
         """Long-polling für Telegram-Befehle (/stop, /start).
