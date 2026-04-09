@@ -256,6 +256,36 @@ class BotLoop:
         await self._notify("\n".join(lines))
         logger.info("Tagesbericht gesendet.")
 
+    async def _send_highscore(self) -> None:
+        """Sendet die Gesamtpunkte-Highscore-Liste via Telegram."""
+        raw = self._last_raw or {}
+        entries = raw.get("highscore", {}).get("points", {}).get("entries", [])
+        if not entries:
+            await self._notify("⚠️ Keine Highscore-Daten verfügbar — Bot noch nicht lange genug aktiv.")
+            return
+
+        own_name = self._config.auth.username.lower()
+        lines = ["🏆 <b>Highscore — Gesamtpunkte</b>", ""]
+
+        for e in sorted(entries, key=lambda x: int(x.get("rank", 999))):
+            rank = e.get("rank", "?")
+            name = e.get("username", "?")
+            value = int(e.get("value", 0))
+            alliance = e.get("alliance", "") or ""
+            alliance_str = f" [{alliance}]" if alliance else ""
+
+            # Eigenen Spieler hervorheben
+            if name.lower() == own_name:
+                lines.append(f"➡️ <b>{rank}. {name}{alliance_str} — {value:,} Pkt.</b>")
+            else:
+                lines.append(f"    {rank}. {name}{alliance_str} — {value:,} Pkt.")
+
+        # Telegram-Limit: 4096 Zeichen — bei zu langer Liste kürzen
+        msg = "\n".join(lines)
+        if len(msg) > 4000:
+            msg = msg[:3990] + "\n…(Liste gekürzt)"
+        await self._notify(msg)
+
     async def _telegram_listener(self) -> None:
         """Long-polling für Telegram-Befehle (/stop, /start).
 
@@ -290,6 +320,9 @@ class BotLoop:
                 elif text == "/status":
                     logger.info("Telegram: Statusbericht angefordert via /status")
                     await self._send_daily_report()
+                elif text == "/highscore":
+                    logger.info("Telegram: Highscore angefordert via /highscore")
+                    await self._send_highscore()
 
     def _record_to_db(self) -> None:
         """Schreibt den aktuellen GameState + Highscores in die SQLite-DB."""
