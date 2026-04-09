@@ -186,7 +186,6 @@ class BotLoop:
             self._log_final_status()
             ts.set_status("stopped")
             logger.info("Bot gestoppt.")
-            await self._notify("🛑 <b>IceWars-Bot gestoppt.</b>")
             await self._browser.stop()
 
     async def _status_reporter(self) -> None:
