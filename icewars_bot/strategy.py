@@ -63,7 +63,7 @@ PRODUCTION_BUILDINGS: dict[str, tuple[str, str]] = {
 # ── Wohngebäude (bestes zuerst — für den Legacy-Fallback) ────────────────────
 HOUSING_BUILDINGS: list[tuple[str, str, int]] = [
     # (building_type, name, pop_added) — absteigend nach Nutzen sortiert
-    ("house",       "Mittleres Wohnhaus", 300),  # 300 Siedler — bevorzugen
+    ("house_medium", "Mittleres Wohnhaus", 300),  # 300 Siedler — bevorzugen
     ("house_small", "Kleines Wohnhaus",    60),  # 60 Siedler
     ("tent",        "Zelt",                15),  # 15 Siedler — Fallback
 ]
@@ -82,7 +82,7 @@ BUILDING_NAMES: dict[str, str] = {
     # Wohngebäude
     "tent":               "Zelt",
     "house_small":        "Kleines Wohnhaus",
-    "house":              "Mittleres Wohnhaus",
+    "house_medium":       "Mittleres Wohnhaus",
     "house_large":        "Großes Wohnhaus",
     "apartment":          "Apartmentblock",
     # Zufriedenheit

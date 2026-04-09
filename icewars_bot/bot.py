@@ -313,19 +313,23 @@ class BotLoop:
         self._last_rank = current_rank
 
     async def _check_completed_buildings(self, state: GameState) -> None:
-        """Erkennt fertiggestellte Gebäude (Einträge die aus der Queue verschwunden sind)."""
+        """Erkennt fertiggestellte Gebäude (Einträge die aus der Queue verschwunden sind).
+
+        Vergleich über finish_time statt Name — so werden auch Gebäude erkannt
+        die sofort durch denselben Typ ersetzt werden (gleicher Name, neue Zeit).
+        """
         if not self._last_queue:
             return  # erste Runde — keine Vergleichsbasis
 
-        # Zähle wie oft jeder Name in der alten und neuen Queue vorkommt
-        from collections import Counter
-        prev_counts = Counter(item.name for item in self._last_queue if item.name)
-        curr_counts = Counter(item.name for item in state.build_queue if item.name)
+        # finish_time ist pro Bauslot eindeutig — verschwindet sie, ist das Gebäude fertig
+        curr_finish_times = {item.finish_time for item in state.build_queue if item.finish_time}
 
-        for name, prev_n in prev_counts.items():
-            finished = prev_n - curr_counts.get(name, 0)
-            for _ in range(finished):
-                logger.info("Gebäude fertig: '%s'", name)
+        for item in self._last_queue:
+            if not item.finish_time:
+                continue
+            if item.finish_time not in curr_finish_times:
+                name = item.name or item.building_type or "Unbekanntes Gebäude"
+                logger.info("Gebäude fertig: '%s' (finish_time=%s)", name, item.finish_time)
                 await self._notify(f"🏗️ <b>Gebäude fertiggestellt!</b>\n{name}")
 
     async def _run_turn(self) -> None:
