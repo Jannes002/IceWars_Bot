@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import time
 from dataclasses import dataclass, field
@@ -153,12 +154,14 @@ class BotLoop:
             status_task = asyncio.create_task(self._status_reporter())
             db_task = asyncio.create_task(self._db_recorder())
             auth_task = asyncio.create_task(self._auth_checker())
+            daily_task = asyncio.create_task(self._daily_reporter())
+            tg_task = asyncio.create_task(self._telegram_listener())
             try:
                 while True:
                     await self._run_turn()
                     await asyncio.sleep(self._config.bot.turn_delay_s)
             finally:
-                for t in (status_task, db_task, auth_task):
+                for t in (status_task, db_task, auth_task, daily_task, tg_task):
                     t.cancel()
                     try:
                         await t
@@ -206,6 +209,84 @@ class BotLoop:
                         await self._auth.ensure_logged_in()
             except Exception as e:
                 logger.error("Auth-Check: %s", type(e).__name__)
+
+    async def _daily_reporter(self) -> None:
+        """Sendet jeden Tag um 11:30 Uhr einen Statusbericht via Telegram."""
+        while True:
+            now = datetime.datetime.now()
+            target = now.replace(hour=11, minute=30, second=0, microsecond=0)
+            if now >= target:
+                target += datetime.timedelta(days=1)
+            wait_sec = (target - now).total_seconds()
+            logger.debug("Tagesbericht in %.0f Minuten.", wait_sec / 60)
+            await asyncio.sleep(wait_sec)
+            await self._send_daily_report()
+
+    async def _send_daily_report(self) -> None:
+        """Baut die tägliche Statusnachricht und sendet sie."""
+        state = self._last_state
+        if state is None:
+            return
+        r = state.resources
+        rt = state.rates
+        rank_str = f"Platz {self._last_rank}" if self._last_rank else "unbekannt"
+        today = datetime.datetime.now().strftime("%d.%m.%Y")
+
+        def _fmt(val: float, rate: float, unit: str = "") -> str:
+            return f"{val:>12,.0f}{unit}  ({rate:+,.0f}/h)"
+
+        lines = [
+            f"📊 <b>Tagesbericht {today}</b>",
+            "",
+            f"🏆 Rang: <b>{rank_str}</b>  |  Punkte: {state.points:,}",
+            f"👥 Bevölkerung: {state.population_free:,} frei / {state.population_max:,} max"
+            f"  |  😊 {state.satisfaction * 100:.0f} %",
+            "",
+            "<b>Ressourcen:</b>",
+            f"  ⛏ Eisen      : {_fmt(r.iron,       rt.iron)}",
+            f"  🔩 Stahl      : {_fmt(r.steel,      rt.steel)}",
+            f"  🧪 Chemikalien: {_fmt(r.chemicals,  rt.chemicals)}",
+            f"  🧊 Eis        : {_fmt(r.ice,        rt.ice)}",
+            f"  💧 Wasser     : {_fmt(r.water,      rt.water)}",
+            f"  ⚡ Energie    : {_fmt(r.energy,     rt.energy)}",
+            f"  💎 VV4A       : {_fmt(r.vv4a,       rt.vv4a)}",
+            f"  💰 Credits    : {r.credits:>12,.1f}  ({rt.credits:+,.1f}/h)",
+            f"  🔬 FP         : {_fmt(r.fp,         rt.fp)}",
+        ]
+        await self._notify("\n".join(lines))
+        logger.info("Tagesbericht gesendet.")
+
+    async def _telegram_listener(self) -> None:
+        """Long-polling für Telegram-Befehle (/stop, /start).
+
+        Nur Nachrichten vom konfigurierten chat_id werden verarbeitet.
+        Läuft dauerhaft parallel zum Bot-Loop.
+        """
+        if not self._tg:
+            return
+        offset = 0
+        logger.info("Telegram-Listener gestartet (wartet auf /stop und /start).")
+        while True:
+            updates = await self._tg.get_updates(offset=offset, timeout=30)
+            for upd in updates:
+                offset = upd["update_id"] + 1
+                msg = upd.get("message", {})
+                chat_id = str(msg.get("chat", {}).get("id", ""))
+                if chat_id != self._tg.chat_id:
+                    continue  # fremde Chats ignorieren
+                text = msg.get("text", "").strip().lower()
+                if text == "/stop":
+                    ts.set_paused(True)
+                    logger.info("Telegram: Bot pausiert via /stop")
+                    await self._notify(
+                        "⏸️ <b>Bot pausiert.</b>\n"
+                        "Alle Entscheidungen werden ausgesetzt.\n"
+                        "Sende /start zum Fortfahren."
+                    )
+                elif text == "/start":
+                    ts.set_paused(False)
+                    logger.info("Telegram: Bot fortgesetzt via /start")
+                    await self._notify("▶️ <b>Bot läuft wieder.</b>")
 
     def _record_to_db(self) -> None:
         """Schreibt den aktuellen GameState + Highscores in die SQLite-DB."""

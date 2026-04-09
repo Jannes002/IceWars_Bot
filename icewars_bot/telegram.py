@@ -29,7 +29,12 @@ class TelegramNotifier:
 
     def __init__(self, token: str, chat_id: str) -> None:
         self._chat_id = str(chat_id)
-        self._url = f"https://api.telegram.org/bot{token}/sendMessage"
+        self._base_url = f"https://api.telegram.org/bot{token}"
+        self._url = f"{self._base_url}/sendMessage"
+
+    @property
+    def chat_id(self) -> str:
+        return self._chat_id
 
     async def send(self, text: str) -> bool:
         """Sendet eine Nachricht. Gibt True zurück wenn erfolgreich.
@@ -61,6 +66,31 @@ class TelegramNotifier:
         )
         with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
             resp.read()
+
+    def _get_updates_sync(self, offset: int, timeout: int) -> list:
+        """Synchrones long-polling für Telegram-Updates (wird im Executor aufgerufen)."""
+        import urllib.parse
+        params = urllib.parse.urlencode({
+            "offset": offset,
+            "timeout": timeout,
+            "allowed_updates": '["message"]',
+        })
+        url = f"{self._base_url}/getUpdates?{params}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=timeout + 10, context=_SSL_CTX) as resp:
+            data = json.loads(resp.read())
+        return data.get("result", [])
+
+    async def get_updates(self, offset: int = 0, timeout: int = 30) -> list:
+        """Holt neue Updates via long-polling. Gibt eine Liste von Update-Dicts zurück."""
+        loop = asyncio.get_event_loop()
+        try:
+            return await loop.run_in_executor(None, self._get_updates_sync, offset, timeout)
+        except urllib.error.HTTPError as e:
+            logger.debug("getUpdates HTTP-Fehler %s", e.code)
+        except Exception as e:
+            logger.debug("getUpdates Fehler: %s", e)
+        return []
 
 
 def make_notifier(config: object) -> Optional[TelegramNotifier]:
