@@ -133,6 +133,7 @@ class BotLoop:
         self._last_queue: list[BuildQueueItem] = []    # Bauwarteschlange vorherige Runde
         self._low_resources: set[str] = set()          # Ressourcen unter 15%-Schwelle (bereits gemeldet)
         self._donated_resources: set[str] = set()      # Ressourcen über 95%-Schwelle (Spende bereits ausgelöst)
+        self._last_auto_build_time: float = 0.0        # Zeitpunkt des letzten Auto-Builds
 
     async def run(self) -> None:
         logger.info("Bot startet...")
@@ -422,6 +423,9 @@ class BotLoop:
                 elif text == "/highscore":
                     logger.info("Telegram: Highscore angefordert via /highscore")
                     await self._send_highscore()
+                elif text == "/spenden":
+                    logger.info("Telegram: Spende angefordert via /spenden")
+                    await self._execute_telegram_donate()
 
     def _record_to_db(self) -> None:
         """Schreibt den aktuellen GameState + Highscores in die SQLite-DB."""
@@ -548,6 +552,12 @@ class BotLoop:
                 logger.info("Gebäude fertig: '%s' (finish_time=%s)", name, item.finish_time)
                 await self._notify(f"🏗️ <b>Gebäude fertiggestellt!</b>\n{name}")
 
+    @staticmethod
+    def _is_night_mode() -> bool:
+        """True zwischen 23:00 und 04:00 Uhr — kein Auto-Build."""
+        hour = datetime.datetime.now().hour
+        return hour >= 23 or hour < 4
+
     async def _execute_requested_action_if_pending(self) -> None:
         """Führt eine vom Dashboard angeforderte Aktion aus."""
         action_dict = ts.consume_execute_request()
@@ -587,7 +597,7 @@ class BotLoop:
             logger.error("Dashboard-Ausführung fehlgeschlagen: %s", type(e).__name__)
 
     async def _execute_donate_request_if_pending(self) -> None:
-        """Führt eine vom Dashboard angeforderte Allianz-Spende aus."""
+        """Führt eine vom Dashboard angeforderte Allianz-Spende via Browser aus."""
         donate_req = ts.consume_donate_request()
         if donate_req is None:
             return
@@ -595,22 +605,50 @@ class BotLoop:
         resource = donate_req["resource"]
         amount = donate_req["amount"]
         label = self._MONITORED_RESOURCES.get(resource, resource)
-        logger.info("Dashboard-Spende: %s %d", resource, amount)
+        logger.info("Dashboard-Spende (Browser): %s %d", resource, amount)
 
-        result = await self._scraper.donate_to_alliance(resource, amount)
-        if "_error" in result:
-            logger.warning("Dashboard-Spende fehlgeschlagen (%s): HTTP %s", resource, result.get("_error"))
-            await self._notify(
-                f"⚠️ <b>Spende fehlgeschlagen: {label}</b>\n"
-                f"Versuchte Spende: {amount:,}\n"
-                f"API-Fehler: HTTP {result.get('_error')}"
-            )
-        else:
+        success = await self._executor.donate_to_alliance({resource: amount})
+        if success:
             ts.clear_donate_recommended(resource)
             await self._notify(
                 f"🤝 <b>Allianz-Spende: {label}</b>\n"
                 f"{amount:,} gespendet (via Dashboard)"
             )
+        else:
+            await self._notify(
+                f"⚠️ <b>Spende fehlgeschlagen: {label}</b>\n"
+                f"Browser-Aktion gescheitert"
+            )
+
+    async def _execute_telegram_donate(self) -> None:
+        """Spendet 15% aller Ressourcen mit >85% Füllstand an die Allianz (Telegram /spenden)."""
+        state = self._last_state
+        if state is None:
+            await self._notify("⚠️ Keine Spieldaten — Bot muss erst eine Runde laufen.")
+            return
+
+        donations: dict[str, int] = {}
+        details: list[str] = []
+        for res in ("iron", "steel", "chemicals", "ice", "water", "energy", "vv4a"):
+            ratio = state.capacity.fill_ratio(res, state.resources)
+            if ratio > 0.85:
+                current_val = int(getattr(state.resources, res, 0))
+                donate_amount = int(current_val * 0.15)
+                if donate_amount > 0:
+                    donations[res] = donate_amount
+                    label = self._MONITORED_RESOURCES.get(res, res)
+                    details.append(f"  {label}: {donate_amount:,} ({int(ratio * 100)}%)")
+
+        if not donations:
+            await self._notify("✅ Keine Ressource über 85 % — nichts zu spenden.")
+            return
+
+        success = await self._executor.donate_to_alliance(donations)
+        summary = "\n".join(details)
+        if success:
+            await self._notify(f"🤝 <b>Allianz-Spende (/spenden)</b>\n{summary}")
+        else:
+            await self._notify(f"⚠️ <b>Spende fehlgeschlagen</b>\n{summary}")
 
     async def _run_turn(self) -> None:
         try:
@@ -664,9 +702,58 @@ class BotLoop:
             actions = self._strategy.decide(state)
             ts.update_planned([_action_to_task(a) for a in actions])
 
-            # Aktionen NICHT ausführen — erste Aktion als Empfehlung im Dashboard anzeigen
-            if actions:
-                first = actions[0]
+            # Aktionen nach Typ trennen
+            build_actions = [a for a in actions if a.type != "start_research"]
+            research_actions = [a for a in actions if a.type == "start_research"]
+
+            # ── Auto-Research: sofort wenn Labor frei ──────────────────────
+            if research_actions:
+                research = research_actions[0]
+                task = _action_to_task(research)
+                ts.set_running(task)
+                success = await self._executor.execute(research)
+                ts.set_done(task, success)
+                if success:
+                    self._stats.actions_executed += 1
+                    self._record_action_event(research)
+                    logger.info("Auto-Research gestartet: %s", task.label)
+                else:
+                    self._stats.actions_failed += 1
+                await asyncio.sleep(self._config.bot.action_delay_ms / 1000)
+
+            # ── Auto-Build: alle 7 Minuten, nicht nachts ──────────────────
+            now = time.time()
+            auto_build_due = (now - self._last_auto_build_time) >= 420  # 7 min
+
+            if self._is_night_mode():
+                logger.debug("Nachtmodus aktiv (23-04 Uhr) — kein Auto-Build.")
+            elif build_actions and auto_build_due:
+                build = build_actions[0]
+                task = _action_to_task(build)
+                ts.set_running(task)
+                success = await self._executor.execute(build)
+                ts.set_done(task, success)
+
+                btype = build.params.get("building_type", "") if build.type in (
+                    "build_specific", "build_storage"
+                ) else ""
+
+                if success:
+                    self._stats.actions_executed += 1
+                    self._record_action_event(build)
+                    self._last_auto_build_time = now
+                    if btype:
+                        cooldown.record_success(btype)
+                    logger.info("Auto-Build ausgeführt: %s", task.label)
+                else:
+                    self._stats.actions_failed += 1
+                    if btype:
+                        cooldown.record_failure(btype, reason=build.params.get("reason", ""))
+                await asyncio.sleep(self._config.bot.action_delay_ms / 1000)
+
+            # ── Empfehlung für Dashboard (erste Build-Action) ─────────────
+            if build_actions:
+                first = build_actions[0]
                 first_task = _action_to_task(first)
                 ts.set_recommended_action({
                     "type": first.type,

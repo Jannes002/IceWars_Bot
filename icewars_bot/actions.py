@@ -42,11 +42,73 @@ class ActionExecutor:
                 return await self._build_next_building(action.params)
             elif action.type == "start_research":
                 return await self._start_research(action.params)
+            elif action.type == "donate_alliance":
+                return await self.donate_to_alliance(action.params.get("donations", {}))
             else:
                 logger.warning("Unbekannte Aktion: %s", action.type)
                 return False
         except Exception as e:
             logger.error("Aktion '%s' fehlgeschlagen: %s", action.type, type(e).__name__)
+            return False
+
+    # ------------------------------------------------------------------
+    # Allianz-Spende via Browser-UI
+    # ------------------------------------------------------------------
+
+    BANK_INPUT_IDS: dict[str, str] = {
+        "iron": "bank-iron", "steel": "bank-steel",
+        "chemicals": "bank-chemicals", "ice": "bank-ice",
+        "water": "bank-water", "energy": "bank-energy",
+        "vv4a": "bank-vv4a", "credits": "bank-credits",
+    }
+
+    async def donate_to_alliance(self, donations: dict[str, int]) -> bool:
+        """Spendet Ressourcen an die Allianz-Kasse via Browser-UI.
+
+        donations: {"iron": 500, "steel": 200, ...}
+        Navigiert zu Alliance → Kasse, setzt Betraege, klickt Spenden.
+        """
+        if not donations:
+            return False
+        try:
+            # 1. Alliance-View oeffnen
+            await self._page.evaluate("showView('alliance')")
+            await asyncio.sleep(1)
+
+            # 2. Kasse-Tab oeffnen
+            await self._page.evaluate("showAllianceSubTab('bank')")
+            await asyncio.sleep(1)
+
+            # 3. Alle Input-Felder erst auf 0 setzen, dann Betraege eintragen
+            for input_id in self.BANK_INPUT_IDS.values():
+                await self._page.evaluate(
+                    f"document.getElementById('{input_id}').value = 0"
+                )
+            for resource, amount in donations.items():
+                input_id = self.BANK_INPUT_IDS.get(resource)
+                if input_id and amount > 0:
+                    await self._page.evaluate(
+                        f"document.getElementById('{input_id}').value = {int(amount)}"
+                    )
+
+            # 4. Spenden-Button klicken
+            await self._page.evaluate("allianceBankAction('donate')")
+            await asyncio.sleep(1)
+
+            # 5. Zurueck zur Uebersicht
+            await self._page.evaluate("showView('overview')")
+            await asyncio.sleep(0.5)
+
+            logger.info("Allianz-Spende via Browser: %s", donations)
+            return True
+
+        except Exception as e:
+            logger.error("Allianz-Spende fehlgeschlagen: %s", type(e).__name__)
+            # Versuch zurueck zur Uebersicht
+            try:
+                await self._page.evaluate("showView('overview')")
+            except Exception:
+                pass
             return False
 
     # ------------------------------------------------------------------
