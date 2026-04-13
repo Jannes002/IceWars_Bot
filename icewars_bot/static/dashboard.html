@@ -1014,6 +1014,20 @@ const GOAL_FIELDS = [
         fields: [
             { key: 'credits_warn_balance', label: 'Credits Mindestbestand', unit: 'Cr', scale: 1, decimals: 0, tip: 'Unter diesem Bestand bei neg. Rate: keine teuren Gebäude' },
             { key: 'storage_threshold',    label: 'Lager-Schwelle',          unit: '%', scale: 100, decimals: 0, tip: 'Ab diesem Füllstand wird ein neues Lager gebaut' },
+            { key: 'priority_resource',    label: 'Produktions-Priorität',   unit: '',  scale: 1,   decimals: 0, tip: 'Welche Ressource bevorzugt gefördert wird', type: 'select',
+              options: [
+                  { value: 'balanced',  label: '⚖️ Ausgewogen' },
+                  { value: 'iron',      label: '⛏ Eisen' },
+                  { value: 'steel',     label: '🔩 Stahl' },
+                  { value: 'chemicals', label: '🧪 Chemikalien' },
+                  { value: 'ice',       label: '🧊 Eis' },
+                  { value: 'water',     label: '💧 Wasser' },
+                  { value: 'energy',    label: '⚡ Energie' },
+                  { value: 'vv4a',      label: '💎 VV4A' },
+                  { value: 'fp',        label: '🔬 Forschungspunkte' },
+                  { value: 'credits',   label: '💰 Credits' },
+              ]
+            },
         ]
     },
     {
@@ -1047,12 +1061,27 @@ function renderGoalsForm(goals) {
             <h4>${group.group}</h4>
             ${group.fields.map(f => {
                 const raw = getNestedValue(goals, f.key) ?? 0;
-                const display = (raw * f.scale).toFixed(f.decimals);
                 const tip = f.tip ? `title="${f.tip}"` : '';
+                const inputId = 'goal_' + f.key.replace(/\./g, '_');
+
+                // Select-Felder (z.B. Priorität)
+                if (f.type === 'select' && f.options) {
+                    const opts = f.options.map(o =>
+                        `<option value="${o.value}" ${raw === o.value ? 'selected' : ''}>${o.label}</option>`
+                    ).join('');
+                    return `<div class="goal-row" ${tip}>
+                        <label>${f.label}</label>
+                        <select class="goal-input" id="${inputId}" style="width:160px;">${opts}</select>
+                        <span class="unit">${f.unit}</span>
+                    </div>`;
+                }
+
+                // Numerische Felder (Standard)
+                const display = (raw * f.scale).toFixed(f.decimals);
                 return `<div class="goal-row" ${tip}>
                     <label>${f.label}</label>
                     <input class="goal-input" type="number" step="${f.decimals > 0 ? 0.1 : 1}"
-                        id="goal_${f.key.replace(/\./g,'_')}" value="${display}">
+                        id="${inputId}" value="${display}">
                     <span class="unit">${f.unit}</span>
                 </div>`;
             }).join('')}
@@ -1074,6 +1103,13 @@ function collectGoalsFromForm() {
             const inputId = 'goal_' + f.key.replace(/\./g, '_');
             const el = document.getElementById(inputId);
             if (!el) continue;
+
+            // Select-Felder: Wert direkt als String
+            if (f.type === 'select') {
+                patch[f.key] = el.value;
+                continue;
+            }
+
             const displayVal = parseFloat(el.value) || 0;
             const rawVal = displayVal / f.scale;
             if (f.key.startsWith('resource_targets.')) {

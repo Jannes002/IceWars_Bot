@@ -35,6 +35,11 @@ DEFAULTS: dict[str, Any] = {
     # Lager: ab welchem Füllstand ein neues Lager gebaut wird (0–1)
     "storage_threshold": 0.80,
 
+    # Produktions-Priorität: welche Ressource bevorzugt gefördert wird.
+    # Gültige Werte: "balanced" (Standard), "iron", "steel", "chemicals",
+    #                "ice", "water", "energy", "vv4a", "fp", "credits"
+    "priority_resource": "balanced",
+
     # Mindest-Ressourcenmengen (Display-Ziele im Dashboard, keine Bot-Logik)
     "resource_targets": {
         "iron":      0.0,
@@ -136,3 +141,6 @@ def credits_warn_balance() -> float:
 
 def storage_threshold() -> float:
     return float(get().get("storage_threshold", DEFAULTS["storage_threshold"]))
+
+def priority_resource() -> str:
+    return str(get().get("priority_resource", DEFAULTS["priority_resource"]))

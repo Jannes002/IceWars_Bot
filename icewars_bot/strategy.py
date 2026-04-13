@@ -325,6 +325,10 @@ class Strategy:
     def _build_best_growth(self, state: GameState) -> Optional[Action]:
         """Wählt im Normalfall das Gebäude mit der höchsten Effizienz aus.
 
+        Berücksichtigt priority_resource aus den Zielen:
+        - "balanced" → 3 schwächste Ressourcen vergleichen (Standardverhalten)
+        - "iron"/"fp"/… → nur Gebäude für diese Ressource suchen
+
         Präferiert Produktions-Ressourcen mit niedrigen Beständen / niedrigen
         Raten — sonst einfach das produktivste Gebäude (beliebiger Ressource)
         pro Sekunde Bauzeit.
@@ -332,8 +336,33 @@ class Strategy:
         if not state.buildings:
             return None
 
-        # 1) Priorität auf Ressourcen mit schwacher Rate (aber nicht negativ,
-        #    das hätte _fix_negative_rate schon gefangen)
+        priority = G.priority_resource()
+
+        # ── Prioritäts-Modus: nur die gewählte Ressource fördern ──────────
+        if priority != "balanced" and priority in (
+            "iron", "steel", "chemicals", "ice", "water",
+            "energy", "vv4a", "fp", "credits",
+        ):
+            picked = _pick_best(
+                state.buildings,
+                effect_key=f"{priority}_rate",
+                categories=_categories_for_resource_rate(),
+            )
+            if picked:
+                best, score = picked
+                rate_gain = float(best.next_level_effect.get(f"{priority}_rate", 0))
+                logger.info(
+                    "Prioritätsbau (%s): '%s' (+%.1f/h, %.0fs, Score=%.4f).",
+                    priority, best.name, rate_gain, best.build_time_sec, score,
+                )
+                return Action("build_specific", {
+                    "building_type": best.type,
+                    "building_name": best.name,
+                    "reason": f"Priorität: {priority} steigern",
+                })
+            logger.info("Priorität %s — kein baubares Gebäude, Fallback balanced.", priority)
+
+        # ── Balanced-Modus: 3 schwächste Ressourcen vergleichen ───────────
         weak_resources: list[tuple[float, str]] = []
         for resource in ("iron", "steel", "chemicals", "ice", "water",
                          "energy", "vv4a", "fp"):
@@ -342,7 +371,6 @@ class Strategy:
                 weak_resources.append((rate, resource))
         weak_resources.sort()  # schwächste zuerst
 
-        # 2) Für jede schwache Ressource das beste Produktionsgebäude suchen
         best_overall: Optional[tuple[float, BuildingInfo, str]] = None
         for _, resource in weak_resources[:3]:  # nur die 3 schwächsten ansehen
             picked = _pick_best(

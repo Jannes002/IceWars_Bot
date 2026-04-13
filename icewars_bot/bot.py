@@ -21,6 +21,7 @@ from .strategy import Action, Strategy, building_display_name
 from .telegram import TelegramNotifier, make_notifier
 from . import task_state as ts
 from . import cooldown
+from . import goals as G
 
 logger = logging.getLogger(__name__)
 
@@ -426,6 +427,10 @@ class BotLoop:
                 elif text == "/spenden":
                     logger.info("Telegram: Spende angefordert via /spenden")
                     await self._execute_telegram_donate()
+                elif text.startswith("/priorität") or text.startswith("/prioritaet"):
+                    await self._handle_telegram_priority(text)
+                elif text == "/hilfe" or text == "/help":
+                    await self._send_help()
 
     def _record_to_db(self) -> None:
         """Schreibt den aktuellen GameState + Highscores in die SQLite-DB."""
@@ -649,6 +654,73 @@ class BotLoop:
             await self._notify(f"🤝 <b>Allianz-Spende (/spenden)</b>\n{summary}")
         else:
             await self._notify(f"⚠️ <b>Spende fehlgeschlagen</b>\n{summary}")
+
+    # ── Telegram: Priorität setzen ──────────────────────────────────────
+
+    _PRIORITY_LABELS: dict[str, str] = {
+        "balanced":  "⚖️ Ausgewogen",
+        "iron":      "⛏ Eisen",
+        "steel":     "🔩 Stahl",
+        "chemicals": "🧪 Chemikalien",
+        "ice":       "🧊 Eis",
+        "water":     "💧 Wasser",
+        "energy":    "⚡ Energie",
+        "vv4a":      "💎 VV4A",
+        "fp":        "🔬 Forschungspunkte",
+        "credits":   "💰 Credits",
+    }
+
+    async def _handle_telegram_priority(self, text: str) -> None:
+        """Verarbeitet /priorität [ressource] — zeigt oder setzt die Priorität."""
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            # Keine Ressource angegeben → aktuellen Status anzeigen
+            current = G.priority_resource()
+            label = self._PRIORITY_LABELS.get(current, current)
+            options = "\n".join(
+                f"  <code>{k}</code> — {v}" for k, v in self._PRIORITY_LABELS.items()
+            )
+            await self._notify(
+                f"🎯 <b>Aktuelle Priorität:</b> {label}\n\n"
+                f"<b>Setzen mit:</b>\n<code>/priorität [option]</code>\n\n"
+                f"<b>Optionen:</b>\n{options}"
+            )
+            return
+
+        value = parts[1].strip().lower()
+        # Aliase
+        aliases = {
+            "ausgewogen": "balanced", "normal": "balanced", "auto": "balanced",
+            "eisen": "iron", "stahl": "steel", "chemikalien": "chemicals",
+            "chem": "chemicals", "eis": "ice", "wasser": "water",
+            "energie": "energy", "forschung": "fp", "forschungspunkte": "fp",
+        }
+        value = aliases.get(value, value)
+
+        if value not in self._PRIORITY_LABELS:
+            await self._notify(
+                f"⚠️ Unbekannte Priorität: <code>{value}</code>\n"
+                f"Gültige Werte: {', '.join(self._PRIORITY_LABELS.keys())}"
+            )
+            return
+
+        G.update({"priority_resource": value})
+        label = self._PRIORITY_LABELS[value]
+        logger.info("Telegram: Priorität gesetzt auf '%s'", value)
+        await self._notify(f"🎯 <b>Priorität gesetzt:</b> {label}")
+
+    async def _send_help(self) -> None:
+        """Sendet eine Übersicht aller Telegram-Befehle."""
+        await self._notify(
+            "📖 <b>Verfügbare Befehle</b>\n\n"
+            "/start — Bot fortsetzen\n"
+            "/stop — Bot pausieren\n"
+            "/status — Aktueller Ressourcen-Bericht\n"
+            "/highscore — Highscore-Tabelle\n"
+            "/spenden — 15% aller Ressourcen >85% an Allianz spenden\n"
+            "/priorität [res] — Produktions-Priorität anzeigen/setzen\n"
+            "/hilfe — Diese Hilfe anzeigen"
+        )
 
     async def _run_turn(self) -> None:
         try:
