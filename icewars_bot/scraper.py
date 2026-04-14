@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 _cache: dict[str, tuple[Any, float]] = {}
 
 _CACHE_TTL: dict[str, float] = {
-    "research":  30 * 60,   # 30 Minuten (Forschung ändert sich selten)
+    "research":  5 * 60,    # 5 Minuten (FP ändern sich laufend → can_afford muss aktuell sein)
     "highscore": 15 * 60,   # 15 Minuten pro Kategorie (4 Endpunkte)
 }
 

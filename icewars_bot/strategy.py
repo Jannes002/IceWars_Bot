@@ -159,7 +159,18 @@ def _research_priority(item: ResearchItem) -> int:
 
 def _categories_for_resource_rate() -> tuple[str, ...]:
     """Kategorien, in denen Ressourcen-Produktionsgebäude liegen können."""
-    return ("production", "energy", "economy")
+    return ("production", "energy", "economy", "research")
+
+
+# ── Mapping: logischer Ressourcenname → API-Effect-Key in Buildings ───────────
+_EFFECT_KEY_MAP: dict[str, str] = {
+    "credits": "credits_rate",
+}
+
+
+def _effect_key_for(resource: str) -> str:
+    """Gibt den korrekten Effect-Key für eine Ressource zurück."""
+    return _EFFECT_KEY_MAP.get(resource, f"{resource}_rate")
 
 
 def _filter_buildable(
@@ -343,14 +354,15 @@ class Strategy:
             "iron", "steel", "chemicals", "ice", "water",
             "energy", "vv4a", "fp", "credits",
         ):
+            eff_key = _effect_key_for(priority)
             picked = _pick_best(
                 state.buildings,
-                effect_key=f"{priority}_rate",
+                effect_key=eff_key,
                 categories=_categories_for_resource_rate(),
             )
             if picked:
                 best, score = picked
-                rate_gain = float(best.next_level_effect.get(f"{priority}_rate", 0))
+                rate_gain = float(best.next_level_effect.get(eff_key, 0))
                 logger.info(
                     "Prioritätsbau (%s): '%s' (+%.1f/h, %.0fs, Score=%.4f).",
                     priority, best.name, rate_gain, best.build_time_sec, score,
@@ -375,7 +387,7 @@ class Strategy:
         for _, resource in weak_resources[:3]:  # nur die 3 schwächsten ansehen
             picked = _pick_best(
                 state.buildings,
-                effect_key=f"{resource}_rate",
+                effect_key=_effect_key_for(resource),
                 categories=_categories_for_resource_rate(),
             )
             if not picked:
@@ -388,7 +400,7 @@ class Strategy:
             return None
 
         score, best, resource = best_overall
-        rate_gain = float(best.next_level_effect.get(f"{resource}_rate", 0))
+        rate_gain = float(best.next_level_effect.get(_effect_key_for(resource), 0))
         logger.info(
             "Produktionsbau: '%s' (+%.1f %s/h, %.0fs, Score=%.4f).",
             best.name, rate_gain, resource, best.build_time_sec, score,
@@ -427,7 +439,7 @@ class Strategy:
         check.sort()
 
         for rate, resource in check:
-            rate_key = f"{resource}_rate"
+            rate_key = _effect_key_for(resource)
             picked = _pick_best(
                 state.buildings,
                 effect_key=rate_key,
@@ -714,10 +726,25 @@ class Strategy:
         })
 
     def _pick_research(self, state: GameState) -> Optional[ResearchItem]:
+        # Primär: API-seitig als leistbar markierte Forschungen
         candidates = [
             r for r in state.research
             if not r.is_researched and r.has_prereq and r.can_afford
         ]
+        if not candidates:
+            # Fallback: FP-basierte Prüfung mit aktuellem Stand
+            # (Research-Cache kann veraltet sein → can_afford stimmt nicht)
+            current_fp = state.resources.fp
+            candidates = [
+                r for r in state.research
+                if not r.is_researched and r.has_prereq
+                and not r.can_afford and r.fp_cost <= current_fp
+            ]
+            if candidates:
+                logger.info(
+                    "Research-Cache veraltet — %d Forschung(en) per Live-FP (%.0f) leistbar.",
+                    len(candidates), current_fp,
+                )
         if not candidates:
             return None
         candidates.sort(key=_research_priority)
