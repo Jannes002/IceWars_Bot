@@ -118,24 +118,50 @@ def test_research_uses_can_afford_not_manual_fp_check():
 
 # ---------- Forschung: Priorität ----------
 
-def test_priority_list_item_beats_unlisted():
+def test_cheapest_affordable_wins_regardless_of_priority_list():
+    """Neue Policy: immer günstigstes leistbares Item forschen, egal ob es
+    in RESEARCH_PRIORITY steht oder nicht. Priority-Liste ist nur Tiebreaker
+    bei identischen FP-Kosten."""
     strategy = Strategy(make_config())
     state = GameState(
+        resources=Resources(fp=10000),
         research_lab_busy=False,
         research=[
-            research_item("astronomie", "Astronomie", affordable=True, fp_cost=700),        # in Liste
-            research_item("unbekannt_xyz", "Unbekanntes XYZ", affordable=True, fp_cost=100), # nicht in Liste
+            research_item("astronomie", "Astronomie", affordable=True, fp_cost=700),        # in Liste, teuer
+            research_item("unbekannt_xyz", "Unbekanntes XYZ", affordable=True, fp_cost=100), # nicht in Liste, günstig
         ],
     )
     actions = strategy.decide(state)
     research_actions = [a for a in actions if a.type == "start_research"]
     assert len(research_actions) == 1
-    assert research_actions[0].params["research_type"] == "astronomie"
+    assert research_actions[0].params["research_type"] == "unbekannt_xyz"
 
 
-def test_more_unlocks_beats_fewer_unlocks_outside_priority_list():
+def test_research_triggered_when_can_afford_stale_but_fp_available():
+    """Regressionstest: User-Bug — auto-research hat nichts gestartet, obwohl
+    genug FP da waren. Ursache war veralteter ``can_afford``-Cache.
+    Neue Logik prüft FP direkt am GameState."""
     strategy = Strategy(make_config())
     state = GameState(
+        resources=Resources(fp=2000),
+        research_lab_busy=False,
+        research=[
+            # Server-seitig als 'nicht leistbar' markiert, aber reale FP reichen
+            research_item("cheapo", "Cheap Research", affordable=False, fp_cost=1500),
+        ],
+    )
+    actions = strategy.decide(state)
+    research_actions = [a for a in actions if a.type == "start_research"]
+    assert research_actions, "sollte starten, weil FP am state verfügbar"
+    assert research_actions[0].params["research_type"] == "cheapo"
+
+
+def test_cheapest_wins_over_more_unlocks():
+    """Günstigste FP-Kosten gewinnt — auch wenn das teurere Item mehr Gebäude
+    freischaltet. User: 'immer das günstigste verfügbare'."""
+    strategy = Strategy(make_config())
+    state = GameState(
+        resources=Resources(fp=10000),
         research_lab_busy=False,
         research=[
             research_item("aaa", "AAA", affordable=True, unlocks_b=[], fp_cost=100),
@@ -144,7 +170,7 @@ def test_more_unlocks_beats_fewer_unlocks_outside_priority_list():
     )
     actions = strategy.decide(state)
     research_actions = [a for a in actions if a.type == "start_research"]
-    assert research_actions[0].params["research_type"] == "bbb"
+    assert research_actions[0].params["research_type"] == "aaa"
 
 
 def test_research_priority_function():
@@ -175,7 +201,7 @@ def test_negative_iron_rate_builds_iron_mine():
     actions = strategy.decide(state)
     build_actions = [a for a in actions if a.type == "build_specific"]
     assert build_actions, "sollte ein Produktionsgebäude bauen"
-    assert build_actions[0].params["building_type"] == "iron_mine"
+    assert build_actions[0].params["building_type"] == "iron_mine_small"
 
 
 def test_negative_energy_rate_builds_solar():
@@ -185,7 +211,7 @@ def test_negative_energy_rate_builds_solar():
     actions = strategy.decide(state)
     build_actions = [a for a in actions if a.type == "build_specific"]
     assert build_actions
-    assert build_actions[0].params["building_type"] == "solar_plant"
+    assert build_actions[0].params["building_type"] == "solar_panels"
 
 
 def test_worst_negative_rate_first():
@@ -195,7 +221,7 @@ def test_worst_negative_rate_first():
                                      water=-50, energy=10, vv4a=10, credits=10, fp=10))
     actions = strategy.decide(state)
     build_actions = [a for a in actions if a.type == "build_specific"]
-    assert build_actions[0].params["building_type"] == "water_pump"  # -50 ist schlimmer als -1
+    assert build_actions[0].params["building_type"] == "tauchsieder"  # -50 ist schlimmer als -1
 
 
 def test_skip_when_production_already_in_queue():
@@ -204,12 +230,12 @@ def test_skip_when_production_already_in_queue():
     state = _good_state(
         rates=Rates(iron=-1, steel=10, chemicals=10, ice=10,
                     water=-2, energy=10, vv4a=10, credits=10, fp=10),
-        build_queue=[BuildQueueItem("water_pump", "Wasserpumpe")],
+        build_queue=[BuildQueueItem("tauchsieder", "Tauchsieder")],
     )
     actions = strategy.decide(state)
     build_actions = [a for a in actions if a.type == "build_specific"]
-    # Wasserpumpe schon im Bau → nimmt iron_mine als nächste negative Rate
-    assert build_actions[0].params["building_type"] == "iron_mine"
+    # Tauchsieder schon im Bau → nimmt iron_mine_small als nächste negative Rate
+    assert build_actions[0].params["building_type"] == "iron_mine_small"
 
 
 def test_zero_rate_also_triggers():
@@ -219,7 +245,7 @@ def test_zero_rate_also_triggers():
                                      water=10, energy=10, vv4a=10, credits=10, fp=10))
     actions = strategy.decide(state)
     build_actions = [a for a in actions if a.type == "build_specific"]
-    assert build_actions[0].params["building_type"] == "iron_mine"
+    assert build_actions[0].params["building_type"] == "iron_mine_small"
 
 
 def test_all_positive_falls_through_to_normal_build():

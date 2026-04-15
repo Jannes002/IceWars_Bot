@@ -68,6 +68,16 @@ class BotTaskState:
     # Jeder Eintrag: {"resource": str, "amount": int}
     donate_requests: list = field(default_factory=list)
 
+    # Scoring-Transparenz: Snapshot der aktuell vom Bot verglichenen Gebäude.
+    # Wird von Strategy.decide() per ``build_scoring_snapshot`` erzeugt und
+    # vom Dashboard unter /api/scoring ausgelesen.
+    scoring_snapshot: list = field(default_factory=list)
+
+    # Seen-Sets: Gebäude-Typen und Forschungen, die der Bot bereits gemeldet hat.
+    # Verhindern, dass pro Turn erneute Telegram-Benachrichtigungen gesendet werden.
+    seen_unknown_building_types: set = field(default_factory=set)
+    seen_researched_types: set = field(default_factory=set)
+
     def to_dict(self) -> dict:
         return {
             "bot_status": self.bot_status,
@@ -272,3 +282,43 @@ def consume_donate_request() -> Optional[dict]:
 def has_donate_request() -> bool:
     with _lock:
         return len(_state.donate_requests) > 0
+
+
+# ── Scoring-Snapshot + Diff-Sets ─────────────────────────────────────────────
+
+def set_scoring_snapshot(rows: list) -> None:
+    """Speichert den zuletzt von Strategy.decide() erzeugten Scoring-Snapshot."""
+    with _lock:
+        _state.scoring_snapshot = list(rows)
+
+
+def get_scoring_snapshot() -> list:
+    with _lock:
+        return list(_state.scoring_snapshot)
+
+
+def mark_building_seen(btype: str) -> bool:
+    """Merkt sich einen Gebäude-Typ als 'schon gesehen'. True, falls neu."""
+    with _lock:
+        if btype in _state.seen_unknown_building_types:
+            return False
+        _state.seen_unknown_building_types.add(btype)
+        return True
+
+
+def mark_research_seen(rtype: str) -> bool:
+    """Merkt sich eine abgeschlossene Forschung. True, falls neu."""
+    with _lock:
+        if rtype in _state.seen_researched_types:
+            return False
+        _state.seen_researched_types.add(rtype)
+        return True
+
+
+def initialize_seen_research(rtypes: list) -> None:
+    """Initialisiert das seen-Set beim Bot-Start mit dem bereits abgeschlossenen Research.
+
+    Verhindert, dass beim ersten Turn eine Flut an 'neuen' Benachrichtigungen kommt.
+    """
+    with _lock:
+        _state.seen_researched_types.update(rtypes)

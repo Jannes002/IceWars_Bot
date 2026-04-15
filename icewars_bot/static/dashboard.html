@@ -383,6 +383,20 @@
 
     </div>
 
+    <!-- ── Scoring-Transparenz (welches Gebäude wird warum bevorzugt?) ────── -->
+    <div class="chart-card" style="margin:18px 24px; padding:16px;">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+            <h3 style="margin:0;">Scoring-Empfehlungen</h3>
+            <span id="scoring-params" style="font-size:0.72rem; color:var(--text-dim);"></span>
+        </div>
+        <div style="font-size:0.72rem; color:var(--text-dim); margin-bottom:8px;">
+            Score = (Nutzen / Bauzeit<sup>α</sup>) × 1/(1+count/K) — höherer Score ⇒ bevorzugter Bau.
+        </div>
+        <div id="scoring-table-wrap" style="max-height:400px; overflow-y:auto;">
+            <div style="color:var(--text-dim); font-size:0.82rem;">Noch kein Snapshot — warte auf ersten Turn.</div>
+        </div>
+    </div>
+
     <!-- Bau- & Forschungshistorie -->
     <div class="chart-card" style="margin:18px 0; padding:16px;">
         <h3 style="margin-bottom:12px;">Bau- &amp; Forschungshistorie</h3>
@@ -1167,6 +1181,67 @@ async function loadTasks() {
     }
 }
 
+async function loadScoring() {
+    try {
+        const data = await fetch('/api/scoring').then(r => r.json());
+        renderScoringPanel(data);
+    } catch (e) {
+        console.warn('Scoring nicht verfügbar:', e);
+    }
+}
+
+function renderScoringPanel(data) {
+    const wrap = document.getElementById('scoring-table-wrap');
+    if (!wrap) return;
+    const params = data.params || {};
+    const paramsEl = document.getElementById('scoring-params');
+    if (paramsEl) {
+        paramsEl.textContent = `α = ${params.time_alpha ?? '?'} · K = ${params.diversify_k ?? '?'}`;
+    }
+    const rows = data.rows || [];
+    if (!rows.length) {
+        wrap.innerHTML = '<div style="color:var(--text-dim); font-size:0.82rem;">Noch kein Snapshot — warte auf ersten Turn.</div>';
+        return;
+    }
+    const fmt = (n) => {
+        if (n >= 1) return n.toFixed(3);
+        if (n >= 0.01) return n.toFixed(4);
+        return n.toExponential(2);
+    };
+    const secToStr = (s) => {
+        if (s < 60) return `${s}s`;
+        if (s < 3600) return `${Math.round(s/60)}m`;
+        return `${Math.floor(s/3600)}h${Math.round((s%3600)/60)}m`;
+    };
+    wrap.innerHTML = `
+      <table style="width:100%; border-collapse:collapse; font-size:0.78rem;">
+        <thead style="position:sticky; top:0; background:var(--card-bg);">
+          <tr style="text-align:left; color:var(--text-dim); border-bottom:1px solid var(--border);">
+            <th style="padding:6px 8px;">#</th>
+            <th style="padding:6px 8px;">Gebäude</th>
+            <th style="padding:6px 8px;">Kategorie</th>
+            <th style="padding:6px 8px;">Nutzen</th>
+            <th style="padding:6px 8px; text-align:right;">Count</th>
+            <th style="padding:6px 8px; text-align:right;">Bauzeit</th>
+            <th style="padding:6px 8px; text-align:right;">Score</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((r, i) => `
+            <tr style="border-bottom:1px solid var(--border);${i === 0 ? 'background:rgba(80,180,120,0.08);' : ''}">
+              <td style="padding:6px 8px; color:var(--text-dim);">${i+1}</td>
+              <td style="padding:6px 8px; font-weight:${i === 0 ? '600' : '400'};">${r.name}</td>
+              <td style="padding:6px 8px; color:var(--text-dim);">${r.category || ''}</td>
+              <td style="padding:6px 8px;">${r.effect_label}</td>
+              <td style="padding:6px 8px; text-align:right;">${r.count}</td>
+              <td style="padding:6px 8px; text-align:right;">${secToStr(r.build_time_sec)}</td>
+              <td style="padding:6px 8px; text-align:right; font-family:monospace;">${fmt(r.score)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+}
+
 async function togglePause() {
     const btn = document.getElementById('pause-btn');
     const isPaused = btn.classList.contains('is-paused');
@@ -1524,6 +1599,8 @@ window.addEventListener('load', () => {
     startAutoRefresh();
     setInterval(loadTasks, 5000);
     loadTasks();
+    setInterval(loadScoring, 10000);
+    loadScoring();
 });
 </script>
 </body>

@@ -47,21 +47,10 @@ async (endpoint) => {
 }
 """
 
-_API_POST_JS = """
-async ([endpoint, body]) => {
-    const token = localStorage.getItem('icewars_token');
-    const resp = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-            'Authorization': 'Bearer ' + token,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(body)
-    });
-    if (!resp.ok) return { _error: resp.status, _url: endpoint };
-    return await resp.json();
-}
-"""
+# UI-Only-Writes Regel: Schreibende API-Aufrufe wurden entfernt.
+# Alle mutierenden Aktionen (Bau, Forschung, Spende) laufen ausschließlich
+# über die Weboberfläche in icewars_bot/actions.py (Playwright-Klicks).
+# Hier bleiben nur noch GET-Leser.
 
 # JavaScript: liest die Bauwarteschlange direkt aus dem DOM
 # Strategie: alle [data-rem]-Timer auf der Seite suchen, dann Kontext nach oben traversieren
@@ -309,17 +298,9 @@ class GameScraper:
     async def _api_get(self, endpoint: str) -> dict[str, Any]:
         return await self._page.evaluate(_API_JS, endpoint)
 
-    async def _api_post(self, endpoint: str, body: dict) -> dict[str, Any]:
-        return await self._page.evaluate(_API_POST_JS, [endpoint, body])
-
-    async def donate_to_alliance(self, resource: str, amount: int) -> dict[str, Any]:
-        """Spendet amount Einheiten einer Ressource in die Allianz-Kasse."""
-        result = await self._api_post("/api/alliance/donate", {
-            "resource": resource,
-            "amount": amount,
-        })
-        logger.info("Allianz-Spende %s=%d → %s", resource, amount, result)
-        return result
+    # HINWEIS: Schreibende API-Aufrufe wurden bewusst entfernt (UI-Only-Writes).
+    # Allianz-Spenden laufen jetzt ausschließlich über
+    # ``ActionExecutor.donate_to_alliance`` (actions.py), das die Web-UI bedient.
 
     @staticmethod
     def _finish_time_from_rem(remaining_sec: int) -> str:

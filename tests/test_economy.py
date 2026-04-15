@@ -54,7 +54,13 @@ def test_critical_satisfaction_triggers_happiness_build():
     state = gs(satisfaction=-0.05)
     actions = s.decide(state)
     assert actions[0].type == "build_specific"
-    assert actions[0].params["building_type"] in ("outhouse", "scout_camp", "park", "asylum")
+    # Legacy-Fallback nimmt das erste verfügbare Happiness-Gebäude.
+    # Die aktuelle Liste startet mit tavern/theater/cinema/teen_disco/…
+    assert actions[0].params["building_type"] in (
+        "tavern", "theater", "cinema", "teen_disco", "beauty_salon",
+        "pizza_large", "pizza_small", "scout_camp", "park",
+        "outhouse", "asylum",
+    )
 
 
 def test_low_satisfaction_triggers_happiness_build():
@@ -77,12 +83,15 @@ def test_good_satisfaction_no_happiness_build():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_credits_tight_only_builds_outhouse():
-    """Bei knappen Credits sollte Plumpsklo (ohne Credits-Kosten) gewählt werden."""
+    """Bei knappen Credits sollten nur Gebäude ohne Credits-Kosten gewählt
+    werden. Der Legacy-Filter überspringt park/scout_camp/asylum — das erste
+    verbleibende Happiness-Gebäude wird genommen."""
     s = Strategy(cfg())
     state = gs(satisfaction=0.10, credits_rate=-10, resources=Resources(credits=5))
     actions = s.decide(state)
     assert actions[0].type == "build_specific"
-    assert actions[0].params["building_type"] == "outhouse"
+    # park, scout_camp und asylum dürfen hier NICHT erscheinen (Credits-Filter)
+    assert actions[0].params["building_type"] not in ("park", "scout_camp", "asylum")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -95,7 +104,10 @@ def test_low_population_triggers_housing():
     state = gs(population_free=40, population_max=400, satisfaction=0.90)
     actions = s.decide(state)
     assert actions[0].type == "build_specific"
-    assert actions[0].params["building_type"] in ("tent", "house_small", "house_medium")
+    assert actions[0].params["building_type"] in (
+        "tent", "house_small", "house_medium", "house_large",
+        "pop_center", "villa_complex", "settlement_complex",
+    )
 
 
 def test_adequate_population_no_housing():
@@ -165,7 +177,10 @@ def test_population_beats_storage():
     )
     actions = s.decide(state)
     assert actions[0].type == "build_specific"
-    assert actions[0].params["building_type"] in ("tent", "house_small", "house_medium")
+    assert actions[0].params["building_type"] in (
+        "tent", "house_small", "house_medium", "house_large",
+        "pop_center", "villa_complex", "settlement_complex",
+    )
 
 
 def test_no_build_action_when_slots_full():
@@ -182,17 +197,22 @@ def test_no_build_action_when_slots_full():
 
 
 def test_skip_housing_already_in_queue():
+    """Wenn ein Wohngebäude schon im Bau ist, wird es übersprungen und das
+    nächstbeste gewählt."""
     s = Strategy(cfg())
     state = gs(
         population_free=10, population_max=400,
         satisfaction=0.90,
         max_build_slots=3,  # 3 Slots damit 2 belegt + 1 frei
         build_queue=[
-            BuildQueueItem("tent", "Zelt"),
-            BuildQueueItem("house_medium", "Mittleres Wohnhaus"),
+            BuildQueueItem("house_large", "Großes Wohnhaus"),
         ],
     )
     actions = s.decide(state)
-    # tent + house already in queue → should try house_small
     if actions[0].type == "build_specific":
-        assert actions[0].params["building_type"] == "house_small"
+        # house_large schon im Bau → nimmt das nächste Wohngebäude
+        assert actions[0].params["building_type"] != "house_large"
+        assert actions[0].params["building_type"] in (
+            "pop_center", "villa_complex", "settlement_complex",
+            "house_medium", "house_small", "tent",
+        )

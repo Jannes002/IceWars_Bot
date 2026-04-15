@@ -38,7 +38,26 @@ SATISFACTION_WARN = 0.50  # Unter 50 % → vorsorglich Zufriedenheits-Gebäude b
 # Credits: wenn Rate negativ und Bestand < N → warnen / keine teuren Gebäude
 CREDITS_WARN_BALANCE = 50.0
 
-# ── Ressource → Lagergebäude ──────────────────────────────────────────────────
+# ── Scoring-Parameter (Bauzeit + Diversifikation) ─────────────────────────────
+# Die Bauzeit eines Gebäudetyps wächst serverseitig stark mit der Anzahl bereits
+# gebauter Exemplare. Eine reine benefit/time-Formel bestraft deshalb die
+# nächste Stufe eines häufig gebauten Gebäudes übermäßig stark und bleibt
+# gleichzeitig bei kleinen, bereits überbauten Typen "kleben".
+#
+# Lösung: abgeflachte Zeit + Diversifikations-Strafe.
+#   score = (benefit / build_time_sec ** TIME_ALPHA)
+#           * (1 / (1 + count / DIVERSIFY_K))
+#
+# - TIME_ALPHA < 1.0 → lange Bauzeiten wirken milder im Nenner,
+#   damit hochwertige Gebäude mit langer Bauzeit fair mitverglichen werden.
+# - DIVERSIFY_K  "weicher" Count-Faktor → bei count==K halbiert sich der Score,
+#   sodass der Bot auf frische, noch selten gebaute Alternativen umschwenkt,
+#   sobald deren absoluter Nutzen konkurrenzfähig wird.
+SCORE_TIME_ALPHA: float = 0.7
+SCORE_DIVERSIFY_K: float = 3.0
+
+# ── Ressource → Lagergebäude (Legacy-Fallback: wenn Live-API keine Daten liefert)
+# Priorität: kleinstes vor größerem/Bunker (werden nach Verfügbarkeit gewählt).
 STORAGE_BUILDINGS: dict[str, tuple[str, str]] = {
     "iron":      ("iron_storage_small",  "Eisenlager"),
     "steel":     ("steel_storage_small", "Stahllager"),
@@ -46,35 +65,49 @@ STORAGE_BUILDINGS: dict[str, tuple[str, str]] = {
     "ice":       ("ice_water_storage",   "Eis-/Wasserlager"),
     "water":     ("ice_water_storage",   "Eis-/Wasserlager"),
     "energy":    ("energy_storage",      "Energielager"),
+    "vv4a":      ("vv4a_storage_small",  "VV4A-Lager"),
 }
 
-# ── Ressource → Produktionsgebäude (für negative Rate) ───────────────────────
+# ── Ressource → Produktionsgebäude (Legacy-Fallback für negative Rate) ───────
 PRODUCTION_BUILDINGS: dict[str, tuple[str, str]] = {
-    "iron":      ("iron_mine",     "Eisenmine"),
-    "steel":     ("steel_mill",    "Stahlwerk"),
-    "chemicals": ("chem_plant",    "Chemiewerk"),
-    "ice":       ("ice_mine",      "Eisabbau"),
-    "water":     ("water_pump",    "Wasserpumpe"),
-    "energy":    ("solar_plant",   "Solaranlage"),
-    "vv4a":      ("vv4a_plant",    "VV4A-Anlage"),
-    "fp":        ("research_lab",  "Forschungslabor"),
+    "iron":      ("iron_mine_small",       "Kleine Eisenmine"),
+    "steel":     ("steel_works_small",     "Kleines Stahlwerk"),
+    "chemicals": ("chem_factory_small",    "Kleine Chemiefabrik"),
+    "ice":       ("ice_crusher_design",    "Eisbrecher"),
+    "water":     ("tauchsieder",           "Tauchsieder"),
+    "energy":    ("solar_panels",          "Solarplatten"),
+    "vv4a":      ("vv4a_works",            "VV4A-Werk"),
+    "fp":        ("research_lab",          "Forschungslabor"),
 }
 
 # ── Wohngebäude (bestes zuerst — für den Legacy-Fallback) ────────────────────
 HOUSING_BUILDINGS: list[tuple[str, str, int]] = [
-    # (building_type, name, pop_added) — absteigend nach Nutzen sortiert
-    ("house_medium", "Mittleres Wohnhaus", 300),  # 300 Siedler — bevorzugen
-    ("house_small", "Kleines Wohnhaus",    60),  # 60 Siedler
-    ("tent",        "Zelt",                15),  # 15 Siedler — Fallback
+    # (building_type, name, pop_added) — absteigend nach Siedlerzahl sortiert.
+    # Live-API liefert zusätzlich settlement_complex/villa_complex/asteroid_housing usw.
+    ("house_large",         "Großes Wohnhaus",      2500),
+    ("pop_center",          "Siedlungszentrum",     1200),
+    ("villa_complex",       "Villenkomplex",         600),
+    ("settlement_complex",  "Siedlungskomplex",      500),
+    ("house_medium",        "Mittleres Wohnhaus",    300),
+    ("house_small",         "Kleines Wohnhaus",       60),
+    ("tent",                "Zelt",                   15),
 ]
 
 # ── Zufriedenheits-Gebäude (bestes zuerst — für den Legacy-Fallback) ─────────
 HAPPINESS_BUILDINGS: list[tuple[str, str, float]] = [
-    # (building_type, name, satisfaction_bonus_percent) — absteigend nach Nutzen
-    ("scout_camp",  "Pfadfindercamp", 5.0),  # 5% — bevorzugen
-    ("park",        "Park",           5.0),  # 5% — bevorzugen
-    ("asylum",      "Irrenanstalt",   2.0),  # 2%
-    ("outhouse",    "Plumpsklo",      1.0),  # 1% — Fallback
+    # (building_type, name, satisfaction_bonus_percent) — absteigend nach Nutzen.
+    # Live-API liefert zusätzlich pizza_small/pizza_large/teen_disco/waffle_stand u.a.
+    ("tavern",      "Taverne",       10.0),
+    ("theater",     "Theater",       10.0),
+    ("cinema",      "Kino",          15.0),
+    ("teen_disco",  "Teen-Disco",     8.0),
+    ("beauty_salon","Beautysalon",    7.0),
+    ("pizza_large", "Pizza-Palast",   6.0),
+    ("scout_camp",  "Pfadfindercamp", 5.0),
+    ("park",        "Park",           5.0),
+    ("pizza_small", "Pizzeria",       3.0),
+    ("asylum",      "Irrenanstalt",   2.0),
+    ("outhouse",    "Plumpsklo",      1.0),
 ]
 
 # ── Gebäudetyp → Anzeigename (für Build-Queue-Anzeige) ───────────────────────
@@ -148,6 +181,40 @@ def _research_priority(item: ResearchItem) -> int:
         return len(RESEARCH_PRIORITY) + (100 - unlocks) * 1000 + int(item.fp_cost)
 
 
+def _can_afford_research(item: ResearchItem, state: GameState, current_fp: Optional[float] = None) -> bool:
+    """Prüft ob eine Forschung JETZT leistbar ist.
+
+    Primär vertrauen wir auf ``ResearchItem.can_afford`` (Server-seitig
+    berechnet und meistens aktuell). Zusätzlich akzeptieren wir ein Item,
+    wenn sowohl ``fp_cost`` als auch alle ``res_cost``-Einträge mit dem
+    aktuellen ``GameState`` abgedeckt sind — so überwinden wir einen
+    eventuellen Scraper-Cache-Stale bei dem can_afford=False fälschlich
+    gesetzt war.
+    """
+    if item.can_afford:
+        return True
+    if current_fp is None:
+        current_fp = float(state.resources.fp)
+    if float(item.fp_cost) > current_fp + 1e-6:
+        return False
+    for resource, amount in (item.res_cost or {}).items():
+        have = float(getattr(state.resources, resource, 0))
+        if float(amount) > have + 1e-6:
+            return False
+    return True
+
+
+def _missing_research_resources(item: ResearchItem, state: GameState) -> list[str]:
+    """Liefert eine Liste 'resource(need/have)' für nicht ausreichende Ressourcen."""
+    missing: list[str] = []
+    for resource, amount in (item.res_cost or {}).items():
+        have = float(getattr(state.resources, resource, 0))
+        need = float(amount)
+        if need > have + 1e-6:
+            missing.append(f"{resource}({need:.0f}/{have:.0f})")
+    return missing
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Scoring-Engine: wählt das beste Gebäude einer Kategorie anhand von
 #  Nutzen, Bauzeit und Ressourcen-Kosten aus den Live-API-Daten.
@@ -158,8 +225,13 @@ def _research_priority(item: ResearchItem) -> int:
 # Kosten werden nur als Tiebreaker benutzt, da `can_afford` schon filtert.
 
 def _categories_for_resource_rate() -> tuple[str, ...]:
-    """Kategorien, in denen Ressourcen-Produktionsgebäude liegen können."""
-    return ("production", "energy", "economy", "research")
+    """Kategorien, in denen Ressourcen-Produktionsgebäude liegen können.
+
+    Infrastructure enthält Sonder-Gebäude (market für credits_rate, school/
+    university für research/fp, hospital-verwandte etc.), die ebenfalls
+    Raten erhöhen und deshalb im Scoring berücksichtigt werden sollen.
+    """
+    return ("production", "energy", "economy", "research", "infrastructure")
 
 
 # ── Mapping: logischer Ressourcenname → API-Effect-Key in Buildings ───────────
@@ -194,16 +266,117 @@ def _filter_buildable(
     return out
 
 
-def _score_benefit_per_second(b: BuildingInfo, effect_key: str) -> float:
-    """Nutzen pro Sekunde Bauzeit für einen bestimmten Effekt-Key.
+def _score_building_benefit(b: BuildingInfo, benefit: float) -> float:
+    """Bewertet ein Gebäude anhand eines bekannten Nutzens (benefit).
 
-    Gibt 0 zurück wenn das Gebäude diesen Effekt nicht hat, negativ ist,
-    oder keine Bauzeit bekannt ist.
+    Kombiniert abgeflachte Bauzeit (TIME_ALPHA) mit einer Diversifikations-
+    Strafe, die mit ``b.count`` wächst. Siehe Modul-Dokumentation der
+    Scoring-Parameter oben.
     """
-    benefit = float(b.next_level_effect.get(effect_key, 0))
     if benefit <= 0 or b.build_time_sec <= 0:
         return 0.0
-    return benefit / b.build_time_sec
+    time_weight = max(float(b.build_time_sec), 1.0) ** SCORE_TIME_ALPHA
+    diversification = 1.0 / (1.0 + float(max(b.count, 0)) / SCORE_DIVERSIFY_K)
+    return (benefit / time_weight) * diversification
+
+
+def _score_benefit_per_second(b: BuildingInfo, effect_key: str) -> float:
+    """Score eines Gebäudes anhand eines Effekt-Keys aus ``next_level_effect``.
+
+    Gibt 0 zurück wenn das Gebäude diesen Effekt nicht hat oder die Bauzeit
+    fehlt. Verwendet die neue kombinierte Formel (Bauzeit-Abflachung +
+    Diversifikation).
+    """
+    benefit = float(b.next_level_effect.get(effect_key, 0))
+    return _score_building_benefit(b, benefit)
+
+
+def build_scoring_snapshot(state: GameState, *, limit: int = 25) -> list[dict[str, Any]]:
+    """Erzeugt eine nach Score sortierte Liste aller baubaren Gebäude.
+
+    Für das Dashboard: zeigt pro Gebäude den besten Effect-Key (z. B.
+    iron_rate, population_max, satisfaction, <resource>_capacity) und den
+    mit der neuen Formel berechneten Score — nachvollziehbar, warum ein
+    Gebäude gerade bevorzugt wird.
+    """
+    if not state.buildings:
+        return []
+
+    # Kandidaten-Effekt-Keys pro Kategorie
+    rate_keys = [
+        ("iron", "iron_rate"),
+        ("steel", "steel_rate"),
+        ("chemicals", "chemicals_rate"),
+        ("ice", "ice_rate"),
+        ("water", "water_rate"),
+        ("energy", "energy_rate"),
+        ("vv4a", "vv4a_rate"),
+        ("fp", "fp_rate"),
+        ("credits", "credits_rate"),
+    ]
+    cap_keys = [
+        ("iron", "iron_capacity"),
+        ("steel", "steel_capacity"),
+        ("chemicals", "chemicals_capacity"),
+        ("ice", "ice_capacity"),
+        ("water", "water_capacity"),
+        ("energy", "energy_capacity"),
+        ("vv4a", "vv4a_capacity"),
+    ]
+
+    out: list[dict[str, Any]] = []
+    for b in _filter_buildable(state.buildings):
+        best_score = 0.0
+        best_label = ""
+        best_benefit = 0.0
+        best_key = ""
+        # Raten
+        for label, key in rate_keys:
+            v = float(b.next_level_effect.get(key, 0))
+            if v <= 0:
+                continue
+            s = _score_building_benefit(b, v)
+            if s > best_score:
+                best_score, best_label, best_benefit, best_key = s, f"+{v:.1f} {label}/h", v, key
+        # Bevölkerung
+        pop = float(b.next_level_effect.get("population_max", 0))
+        if pop > 0:
+            s = _score_building_benefit(b, pop)
+            if s > best_score:
+                best_score, best_label, best_benefit, best_key = s, f"+{pop:.0f} Siedler", pop, "population_max"
+        # Zufriedenheit (Werte liegen als 0..1 vor → ×100 für Vergleich/Lesbarkeit)
+        sat = float(b.next_level_effect.get("satisfaction", 0))
+        if sat > 0:
+            s = _score_building_benefit(b, sat * 100)
+            if s > best_score:
+                best_score, best_label, best_benefit, best_key = s, f"+{sat*100:.1f}% Zufriedenheit", sat * 100, "satisfaction"
+        # Lagerkapazität
+        for label, key in cap_keys:
+            v = float(b.next_level_effect.get(key, 0))
+            if v <= 0:
+                continue
+            s = _score_building_benefit(b, v)
+            if s > best_score:
+                best_score, best_label, best_benefit, best_key = s, f"+{v:.0f} {label}-Lager", v, key
+
+        if best_score <= 0:
+            continue
+
+        out.append({
+            "type": b.type,
+            "name": b.name or BUILDING_NAMES.get(b.type, b.type),
+            "category": b.category,
+            "count": int(b.count),
+            "level": int(b.level),
+            "build_time_sec": int(b.build_time_sec),
+            "effect_key": best_key,
+            "effect_label": best_label,
+            "benefit": round(best_benefit, 3),
+            "score": round(best_score, 6),
+        })
+
+    out.sort(key=lambda r: r["score"], reverse=True)
+    return out[:limit]
 
 
 def _pick_best(
@@ -518,8 +691,9 @@ class Strategy:
                     if credits_cost > 0 or credits_drain < 0:
                         logger.debug("'%s' — Credits knapp, überspringe.", b.name)
                         continue
-                score = benefit / max(b.build_time_sec, 1)
-                candidates.append((score, b))
+                score = _score_building_benefit(b, benefit)
+                if score > 0:
+                    candidates.append((score, b))
 
             if candidates:
                 candidates.sort(key=lambda x: x[0], reverse=True)
@@ -726,29 +900,52 @@ class Strategy:
         })
 
     def _pick_research(self, state: GameState) -> Optional[ResearchItem]:
-        # Primär: API-seitig als leistbar markierte Forschungen
-        candidates = [
+        """Wählt die günstigste leistbare Forschung.
+
+        Regel (User-Anforderung): sobald eine Forschung leistbar ist, wird
+        sie auch gestartet — primär nach FP-Kosten aufsteigend, sekundär nach
+        RESEARCH_PRIORITY als Tiebreaker. Die frühere Logik hatte
+        ``_research_priority`` als Hauptkriterium — Items außerhalb der
+        Priority-Liste wurden deshalb zugunsten teurer Prio-Items ignoriert.
+        """
+        pending = [
             r for r in state.research
-            if not r.is_researched and r.has_prereq and r.can_afford
+            if not r.is_researched and r.has_prereq
         ]
-        if not candidates:
-            # Fallback: FP-basierte Prüfung mit aktuellem Stand
-            # (Research-Cache kann veraltet sein → can_afford stimmt nicht)
-            current_fp = state.resources.fp
-            candidates = [
-                r for r in state.research
-                if not r.is_researched and r.has_prereq
-                and not r.can_afford and r.fp_cost <= current_fp
-            ]
-            if candidates:
-                logger.info(
-                    "Research-Cache veraltet — %d Forschung(en) per Live-FP (%.0f) leistbar.",
-                    len(candidates), current_fp,
-                )
-        if not candidates:
+        if not pending:
             return None
-        candidates.sort(key=_research_priority)
-        return candidates[0]
+
+        current_fp = float(state.resources.fp)
+        affordable: list[ResearchItem] = []
+        blocked: list[tuple[ResearchItem, str]] = []
+        for r in pending:
+            if not _can_afford_research(r, state, current_fp):
+                # Grund für Log sammeln
+                if r.fp_cost > current_fp:
+                    blocked.append((r, f"FP {r.fp_cost:.0f}>{current_fp:.0f}"))
+                else:
+                    missing = _missing_research_resources(r, state)
+                    blocked.append((r, "Ress: " + ", ".join(missing) if missing else "Ress. knapp"))
+                continue
+            affordable.append(r)
+
+        if not affordable:
+            if blocked:
+                sample = ", ".join(f"{r.name}({reason})" for r, reason in blocked[:3])
+                logger.info(
+                    "Keine Forschung leistbar — %d wartend. Beispiel: %s",
+                    len(blocked), sample,
+                )
+            return None
+
+        # Primär: günstigste FP-Kosten. Sekundär: Priority-Index (älteres Ranking).
+        affordable.sort(key=lambda r: (float(r.fp_cost), _research_priority(r)))
+        chosen = affordable[0]
+        logger.info(
+            "Auswahl Forschung: '%s' (FP=%.0f) aus %d leistbaren Kandidaten.",
+            chosen.name, chosen.fp_cost, len(affordable),
+        )
+        return chosen
 
     # ──────────────────────────────────────────────────────────────────────
     #  Logging

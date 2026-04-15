@@ -116,11 +116,11 @@ def test_reset_clears_everything():
 
 
 def test_strategy_skips_cooldowned_production_building():
-    """Wenn Eisenmine auf Cooldown ist, aber Eisen UND Stahl negativ sind,
-    soll stattdessen Stahlwerk gebaut werden."""
-    cooldown.record_failure("iron_mine")
-    cooldown.record_failure("iron_mine")
-    assert cooldown.is_on_cooldown("iron_mine") is True
+    """Wenn iron_mine_small auf Cooldown ist, aber Eisen UND Stahl negativ,
+    soll stattdessen das Stahlwerk gebaut werden."""
+    cooldown.record_failure("iron_mine_small")
+    cooldown.record_failure("iron_mine_small")
+    assert cooldown.is_on_cooldown("iron_mine_small") is True
 
     strategy = Strategy(make_config())
     state = GameState(
@@ -136,31 +136,31 @@ def test_strategy_skips_cooldowned_production_building():
     actions = strategy.decide(state)
     build_actions = [a for a in actions if a.type == "build_specific"]
     assert len(build_actions) == 1
-    # Nicht iron_mine (auf Cooldown) — stattdessen steel_mill
-    assert build_actions[0].params["building_type"] == "steel_mill"
+    # Nicht iron_mine_small (Cooldown) — stattdessen steel_works_small
+    assert build_actions[0].params["building_type"] == "steel_works_small"
 
 
 def test_strategy_falls_through_when_all_production_on_cooldown():
     """Wenn alle negativen Produktionsgebäude auf Cooldown sind, geht die
     Strategy zur nächsten Priorität über (hier: build_next_building)."""
-    cooldown.record_failure("iron_mine")
-    cooldown.record_failure("iron_mine")
+    cooldown.record_failure("iron_mine_small")
+    cooldown.record_failure("iron_mine_small")
 
     strategy = Strategy(make_config())
     state = GameState(
         max_build_slots=2, build_queue=[],
         population_free=100, population_max=400, satisfaction=0.90,
         rates=Rates(
-            iron=-5,  # negativ, aber iron_mine auf Cooldown
+            iron=-5,  # negativ, aber iron_mine_small auf Cooldown
             steel=10, chemicals=10, ice=10, water=10, energy=10,
             vv4a=10, credits=10, fp=10,
         ),
     )
     actions = strategy.decide(state)
-    # Sollte NICHT iron_mine bauen, sondern einen anderen Gebäude-Typ wählen
+    # Sollte NICHT iron_mine_small bauen
     for a in actions:
         if a.type == "build_specific":
-            assert a.params["building_type"] != "iron_mine"
+            assert a.params["building_type"] != "iron_mine_small"
 
 
 def test_cooldown_integration_all_production_buildings_defined():

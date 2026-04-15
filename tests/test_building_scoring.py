@@ -17,7 +17,13 @@ from icewars_bot.state import (
     BuildingInfo, Capacity, GameState, Rates, Resources,
 )
 from icewars_bot.strategy import (
-    Strategy, _filter_buildable, _pick_best, _score_benefit_per_second,
+    Strategy,
+    SCORE_DIVERSIFY_K,
+    SCORE_TIME_ALPHA,
+    _filter_buildable,
+    _pick_best,
+    _score_benefit_per_second,
+    build_scoring_snapshot,
 )
 
 
@@ -151,10 +157,60 @@ def state_with(*buildings: BuildingInfo, **overrides) -> GameState:
 
 
 def test_score_benefit_per_second_positive():
+    """Neue Formel: (benefit / time^alpha) * 1/(1+count/K).
+
+    Für house_small (benefit=60, time=117s, count=7):
+      time_weight = 117 ** 0.7 ≈ 28.035
+      diversify   = 1 / (1 + 7/3) = 0.3
+      score       = 60/28.035 * 0.3 ≈ 0.642
+    """
     b = house_small()
     score = _score_benefit_per_second(b, "population_max")
-    # 60 / 117 ≈ 0.513
-    assert score == pytest.approx(60 / 117, rel=1e-4)
+    expected = (60 / (117 ** SCORE_TIME_ALPHA)) * (1 / (1 + 7 / SCORE_DIVERSIFY_K))
+    assert score == pytest.approx(expected, rel=1e-4)
+    assert score > 0
+
+
+def test_diversification_penalty_grows_with_count():
+    """Ein häufig gebauter Typ erhält einen geringeren Score als derselbe
+    Typ bei count=0 — die Diversifikation dämpft weichen ab."""
+    base = house_small()
+    base.count = 0
+    score_fresh = _score_benefit_per_second(base, "population_max")
+
+    built = house_small()
+    built.count = 20
+    score_builtup = _score_benefit_per_second(built, "population_max")
+
+    assert score_fresh > score_builtup
+    # bei count=20 ist der Faktor 1/(1+20/3) ≈ 0.13 — massiv kleiner
+    ratio = score_builtup / score_fresh
+    assert ratio < 0.2
+
+
+def test_scoring_prefers_fresh_high_tier_over_overbuilt_cheap():
+    """Realdaten: iron_mine_small (count=35, 73k s) vs. iron_mine_large
+    (count=0, 180s, 6.4× Rate) — die frische Alternative muss gewinnen."""
+    old = BuildingInfo(
+        type="iron_mine_small", name="Kleine Eisenmine", category="production",
+        count=35, level=35,
+        upgrade_cost={"iron": 150, "water": 50},
+        worker_cost=5, build_time_sec=73955,
+        can_afford=True, reqs_met=True,
+        next_level_effect={"iron_rate": 25},
+    )
+    new = BuildingInfo(
+        type="iron_mine_large", name="Große Eisenmine", category="production",
+        count=0, level=0,
+        upgrade_cost={"iron": 1500, "steel": 500},
+        worker_cost=20, build_time_sec=180,
+        can_afford=True, reqs_met=True,
+        next_level_effect={"iron_rate": 160},
+    )
+    assert (
+        _score_benefit_per_second(new, "iron_rate")
+        > _score_benefit_per_second(old, "iron_rate")
+    )
 
 
 def test_score_returns_zero_when_effect_missing():
@@ -318,6 +374,21 @@ def test_negative_energy_rate_picks_from_energy_category():
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Integration mit Cooldown
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+def test_build_scoring_snapshot_sorted_by_score():
+    """Snapshot-Helper für Dashboard: liefert sortierte Liste baubarer
+    Gebäude mit ihrem jeweils besten Effekt-Key."""
+    state = state_with(tent(), house_small(), iron_mine_small(), iron_storage_small())
+    rows = build_scoring_snapshot(state, limit=10)
+    assert len(rows) >= 2
+    # Nach score absteigend sortiert
+    scores = [r["score"] for r in rows]
+    assert scores == sorted(scores, reverse=True)
+    # Jede Zeile enthält die Pflichtfelder
+    for r in rows:
+        assert "type" in r and "name" in r
+        assert "effect_label" in r and r["score"] > 0
 
 
 def test_cooldown_hides_building_from_scoring():

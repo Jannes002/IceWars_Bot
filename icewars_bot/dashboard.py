@@ -25,6 +25,7 @@ from .db import (
 )
 from . import task_state as ts
 from . import goals as G
+from . import strategy as _strategy
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._api_build_events(qs)
             elif path == "/api/tasks":
                 self._json_response(ts.get())
+            elif path == "/api/scoring":
+                self._json_response({
+                    "params": {
+                        "time_alpha": _strategy.SCORE_TIME_ALPHA,
+                        "diversify_k": _strategy.SCORE_DIVERSIFY_K,
+                    },
+                    "rows": ts.get_scoring_snapshot(),
+                })
             elif path == "/api/goals":
                 self._json_response(G.get())
             else:

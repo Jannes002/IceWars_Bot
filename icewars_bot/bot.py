@@ -17,7 +17,7 @@ from .db import (
 )
 from .scraper import GameScraper
 from .state import BuildQueueItem, GameState, Resources, parse_state
-from .strategy import Action, Strategy, building_display_name
+from .strategy import Action, BUILDING_NAMES, Strategy, build_scoring_snapshot, building_display_name
 from .telegram import TelegramNotifier, make_notifier
 from . import task_state as ts
 from . import cooldown
@@ -557,6 +557,50 @@ class BotLoop:
                 logger.info("Gebäude fertig: '%s' (finish_time=%s)", name, item.finish_time)
                 await self._notify(f"🏗️ <b>Gebäude fertiggestellt!</b>\n{name}")
 
+    async def _detect_new_unlocks(self, state: GameState) -> None:
+        """Erkennt neu verfügbare Gebäude (unbekannter Typ) und neu abgeschlossene
+        Forschung und meldet sie per Telegram. Jeder Eintrag wird nur einmal
+        pro Runtime gemeldet (seen-Sets in task_state).
+        """
+        # 1) Gebäude-Typen, die nicht in BUILDING_NAMES stehen (z. B. neu freigeschaltet)
+        for b in state.buildings or []:
+            btype = b.type or ""
+            if not btype or btype in BUILDING_NAMES:
+                continue
+            if ts.mark_building_seen(btype):
+                name = b.name or btype
+                logger.info("Neuer Gebäude-Typ erkannt: %s (%s)", btype, name)
+                try:
+                    log_path = f"logs/unknown_buildings.log"
+                    import os
+                    os.makedirs("logs", exist_ok=True)
+                    with open(log_path, "a", encoding="utf-8") as fh:
+                        fh.write(f"{datetime.datetime.now().isoformat()} {btype} {name}\n")
+                except Exception:
+                    pass
+                await self._notify(
+                    f"🏗 <b>Neues Gebäude entdeckt</b>\n<code>{btype}</code> — {name}"
+                )
+
+        # 2) Neu abgeschlossene Forschung (seit dem letzten Turn)
+        for r in state.research or []:
+            if not r.is_researched:
+                continue
+            if not r.type:
+                continue
+            if ts.mark_research_seen(r.type):
+                # Erster Turn: seen-Set wird vorher initialisiert → hier kommen
+                # wirklich nur neu abgeschlossene Items an.
+                unlocks = ""
+                if r.unlocks_buildings:
+                    unlocks = "\nSchaltet frei: " + ", ".join(r.unlocks_buildings)
+                elif r.unlocks_ships:
+                    unlocks = "\nSchaltet frei: " + ", ".join(r.unlocks_ships)
+                logger.info("Neue Forschung abgeschlossen: %s", r.name)
+                await self._notify(
+                    f"✅ <b>Forschung abgeschlossen</b>\n{r.name}{unlocks}"
+                )
+
     @staticmethod
     def _is_night_mode() -> bool:
         """True zwischen 23:00 und 04:00 Uhr — kein Auto-Build."""
@@ -731,6 +775,14 @@ class BotLoop:
 
             # Initialzustand beim ersten Scrape merken
             if self._stats.initial_resources is None:
+                # seen-Sets initial befüllen, damit beim Boot keine Flut alter
+                # 'Forschung abgeschlossen' / 'neues Gebäude'-Meldungen raus geht.
+                already_done = [r.type for r in (state.research or []) if r.is_researched and r.type]
+                ts.initialize_seen_research(already_done)
+                for b in (state.buildings or []):
+                    if b.type and b.type not in BUILDING_NAMES:
+                        ts.mark_building_seen(b.type)
+
                 self._stats.initial_resources = Resources(
                     iron=state.resources.iron,
                     steel=state.resources.steel,
@@ -773,6 +825,15 @@ class BotLoop:
 
             actions = self._strategy.decide(state)
             ts.update_planned([_action_to_task(a) for a in actions])
+
+            # Scoring-Transparenz: sortierte Liste aller baubaren Gebäude für Dashboard
+            try:
+                ts.set_scoring_snapshot(build_scoring_snapshot(state, limit=30))
+            except Exception as scoring_err:
+                logger.debug("Scoring-Snapshot fehlgeschlagen: %s", scoring_err)
+
+            # Auto-Detection: unbekannte Gebäudetypen + neu abgeschlossene Forschung
+            await self._detect_new_unlocks(state)
 
             # Aktionen nach Typ trennen
             build_actions = [a for a in actions if a.type != "start_research"]
