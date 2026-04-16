@@ -9,13 +9,39 @@ from .config import Config
 logger = logging.getLogger(__name__)
 
 
+def _normalize_game_url(url: str) -> str:
+    """Stellt sicher, dass die Game-URL ein Protokoll hat.
+
+    Playwright weigert sich, URLs ohne Schema anzusteuern
+    (``Cannot navigate to invalid URL``). Akzeptiert werden daher neben
+    ``https://host/`` auch ``host`` oder ``www.host.de`` aus der Config.
+    """
+    s = (url or "").strip()
+    if not s:
+        return s
+    lower = s.lower()
+    if lower.startswith(("http://", "https://")):
+        return s
+    # Schemaloses Eingabeformat → https:// voranstellen.
+    # Spezialfall ``//host`` (protokollrelativ) ebenfalls zu https aufwerten.
+    if s.startswith("//"):
+        return "https:" + s
+    return "https://" + s
+
+
 class Authenticator:
     def __init__(self, page: Page, config: Config) -> None:
         self._page = page
         self._config = config
 
     async def ensure_logged_in(self) -> bool:
-        await self._page.goto(self._config.auth.game_url)
+        url = _normalize_game_url(self._config.auth.game_url)
+        if url != self._config.auth.game_url:
+            logger.info(
+                "Game-URL ohne Protokoll in config.toml — normalisiert: '%s' → '%s'",
+                self._config.auth.game_url, url,
+            )
+        await self._page.goto(url)
 
         if await self._is_logged_in():
             logger.info("Already logged in.")
