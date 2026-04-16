@@ -537,11 +537,29 @@ class BotLoop:
             await self._notify(msg)
         self._last_rank = current_rank
 
+    def _colony_label(self, state: GameState) -> str:
+        """Liefert einen sprechenden Kolonie-Namen für Benachrichtigungen.
+
+        Bevorzugt ``state.city_name`` (liefert das Spiel als "<User>s Kolonie"),
+        fällt auf ``<username>s Kolonie`` zurück, wenn die API noch nichts
+        gesetzt hat. Coords werden angehängt, falls vorhanden.
+        """
+        name = (state.city_name or "").strip()
+        if not name:
+            user = (self._config.auth.username or "").strip()
+            name = f"{user}s Kolonie" if user else "deiner Kolonie"
+        coords = (state.coords or "").strip()
+        if coords:
+            return f"{name} ({coords})"
+        return name
+
     async def _check_completed_buildings(self, state: GameState) -> None:
         """Erkennt fertiggestellte Gebäude (Einträge die aus der Queue verschwunden sind).
 
         Vergleich über finish_time statt Name — so werden auch Gebäude erkannt
         die sofort durch denselben Typ ersetzt werden (gleicher Name, neue Zeit).
+        Die Telegram-Nachricht nennt Name + neue Stufe + Kolonie, z. B.:
+        "🏗️ Chemielager (Stufe 17) auf admin12345s Kolonie ist fertig".
         """
         if not self._last_queue:
             return  # erste Runde — keine Vergleichsbasis
@@ -549,13 +567,38 @@ class BotLoop:
         # finish_time ist pro Bauslot eindeutig — verschwindet sie, ist das Gebäude fertig
         curr_finish_times = {item.finish_time for item in state.build_queue if item.finish_time}
 
+        # Typ → aktuelle Stufe (nach Fertigstellung zeigt BuildingInfo.level die
+        # gerade frisch erreichte Stufe).
+        level_by_type: dict[str, int] = {
+            (b.type or ""): int(b.level or 0)
+            for b in (state.buildings or [])
+            if b.type
+        }
+
+        colony = self._colony_label(state)
+
         for item in self._last_queue:
             if not item.finish_time:
                 continue
-            if item.finish_time not in curr_finish_times:
-                name = item.name or item.building_type or "Unbekanntes Gebäude"
-                logger.info("Gebäude fertig: '%s' (finish_time=%s)", name, item.finish_time)
-                await self._notify(f"🏗️ <b>Gebäude fertiggestellt!</b>\n{name}")
+            if item.finish_time in curr_finish_times:
+                continue
+
+            btype = item.building_type or ""
+            name = (
+                item.name
+                or building_display_name(btype, btype)
+                or "Unbekanntes Gebäude"
+            )
+            level = level_by_type.get(btype, 0)
+
+            level_part = f" (Stufe {level})" if level > 0 else ""
+            logger.info(
+                "Gebäude fertig: '%s'%s auf %s (finish_time=%s)",
+                name, level_part, colony, item.finish_time,
+            )
+            await self._notify(
+                f"🏗️ <b>{name}</b>{level_part} auf {colony} ist fertig"
+            )
 
     async def _detect_new_unlocks(self, state: GameState) -> None:
         """Erkennt neu verfügbare Gebäude (unbekannter Typ) und neu abgeschlossene
