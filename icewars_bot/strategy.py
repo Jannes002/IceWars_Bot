@@ -522,6 +522,15 @@ class Strategy:
 
         priority = G.priority_resource()
 
+        # Wenn die gewählte Priorität pausiert ist, fällt der Modus auf
+        # "balanced" zurück — sonst würde der Bot gar nichts mehr bauen.
+        if priority != "balanced" and G.is_resource_paused(priority):
+            logger.info(
+                "Priorität '%s' ist pausiert — falle auf balanced zurück.",
+                priority,
+            )
+            priority = "balanced"
+
         # ── Prioritäts-Modus: nur die gewählte Ressource fördern ──────────
         if priority != "balanced" and priority in (
             "iron", "steel", "chemicals", "ice", "water",
@@ -548,9 +557,13 @@ class Strategy:
             logger.info("Priorität %s — kein baubares Gebäude, Fallback balanced.", priority)
 
         # ── Balanced-Modus: 3 schwächste Ressourcen vergleichen ───────────
+        # Pausierte Ressourcen werden komplett übersprungen — der Bot zieht
+        # dann eben eine der anderen schwachen Ressourcen.
         weak_resources: list[tuple[float, str]] = []
         for resource in ("iron", "steel", "chemicals", "ice", "water",
                          "energy", "vv4a", "fp"):
+            if G.is_resource_paused(resource):
+                continue
             rate = getattr(state.rates, resource, 0)
             if rate > 0:
                 weak_resources.append((rate, resource))
@@ -599,11 +612,15 @@ class Strategy:
         if not state.buildings:
             return self._fix_negative_rate_legacy(state)
 
-        # Alle Ressourcen + FP prüfen, sortiert nach Rate (negativste zuerst)
+        # Alle Ressourcen + FP prüfen, sortiert nach Rate (negativste zuerst).
+        # Pausierte Ressourcen werden übersprungen — der Bot soll für sie
+        # keine Produktionsgebäude mehr anstoßen, selbst wenn die Rate fällt.
         resources = ("iron", "steel", "chemicals", "ice", "water",
                      "energy", "vv4a", "fp", "credits")
         check: list[tuple[float, str]] = []
         for resource in resources:
+            if G.is_resource_paused(resource):
+                continue
             rate = getattr(state.rates, resource, 0)
             if rate <= 0:
                 check.append((rate, resource))
@@ -643,6 +660,8 @@ class Strategy:
         """Fallback auf die alte hardcodierte Logik wenn keine Live-Daten da sind."""
         check: list[tuple[float, str]] = []
         for resource in PRODUCTION_BUILDINGS.keys():
+            if G.is_resource_paused(resource):
+                continue
             rate = getattr(state.rates, resource, 0)
             if rate <= 0:
                 check.append((rate, resource))
@@ -792,15 +811,24 @@ class Strategy:
         Wählt das effizienteste Lager (max. Kapazität/Sekunde) aus der
         Kategorie ``storage`` anhand der Live-API-Daten.
         """
-        # 1) Übervolle Ressourcen identifizieren (sortiert nach Füllstand)
+        # 1) Übervolle Ressourcen identifizieren (sortiert nach Füllstand).
+        #    Pausierte Ressourcen werden hier bereits aussortiert — so löst
+        #    z.B. ice=0.95 KEIN Lager mehr aus, wenn 'ice' pausiert ist.
         overflowing: list[tuple[float, str]] = []
         for resource in ("iron", "steel", "chemicals", "ice", "water", "energy", "vv4a"):
+            if G.is_resource_paused(resource):
+                continue
             ratio = state.capacity.fill_ratio(resource, state.resources)
             if ratio >= G.storage_threshold():
                 overflowing.append((ratio, resource))
         if not overflowing:
             return None
         overflowing.sort(reverse=True)
+
+        # Schon in der Bauwarteschlange stehende Lager NICHT erneut triggern —
+        # sonst baut der Bot z.B. zweimal hintereinander das ice_water_storage,
+        # obwohl der erste Bau noch läuft.
+        queued_types = {item.building_type for item in state.build_queue}
 
         if state.buildings:
             # Für jede übervolle Ressource das beste Lager finden
@@ -814,6 +842,12 @@ class Strategy:
                 if not picked:
                     continue
                 best, score = picked
+                if best.type in queued_types:
+                    logger.info(
+                        "Lager '%s' schon in der Queue — überspringe %s-Trigger.",
+                        best.type, resource,
+                    )
+                    continue
                 cap_gain = int(best.next_level_effect.get(cap_key, 0))
                 logger.warning(
                     "Lager-Alarm: %s %.0f%% voll → baue '%s' "
@@ -831,10 +865,6 @@ class Strategy:
             return None
 
         # Legacy-Fallback auf hardcodierte Liste
-        queued_types = {
-            item.building_type for item in state.build_queue
-            if "storage" in item.building_type
-        }
         for ratio, resource in overflowing:
             entry = STORAGE_BUILDINGS.get(resource)
             if not entry:

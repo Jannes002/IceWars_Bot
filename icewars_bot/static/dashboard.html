@@ -199,6 +199,15 @@
             text-align:right;
         }
         .goal-input:focus { outline:none; border-color:var(--accent); }
+        .pause-toggles { display:flex; flex-wrap:wrap; gap:8px 14px; justify-content:flex-end; }
+        .pause-toggle {
+            display:flex; align-items:center; gap:4px;
+            font-size:0.83rem; color:var(--text); cursor:pointer;
+            padding:2px 6px; border-radius:4px;
+            background:var(--bg-card); border:1px solid var(--border);
+        }
+        .pause-toggle input { cursor:pointer; margin:0; }
+        .pause-toggle:has(input:checked) { border-color:var(--accent); color:var(--accent); }
         details > summary { list-style: none; }
         details > summary::-webkit-details-marker { display: none; }
         details[open] summary span:first-child { transform:rotate(90deg); display:inline-block; }
@@ -1045,6 +1054,23 @@ const GOAL_FIELDS = [
         ]
     },
     {
+        group: 'Ressourcen pausieren',
+        fields: [
+            { key: 'paused_resources', label: 'Pausierte Ressourcen', type: 'multi-checkbox',
+              tip: 'Für angehakte Ressourcen baut der Bot weder Lager noch Produktionsgebäude.',
+              options: [
+                  { value: 'iron',      label: '⛏ Eisen' },
+                  { value: 'steel',     label: '🔩 Stahl' },
+                  { value: 'chemicals', label: '🧪 Chemikalien' },
+                  { value: 'ice',       label: '🧊 Eis' },
+                  { value: 'water',     label: '💧 Wasser' },
+                  { value: 'energy',    label: '⚡ Energie' },
+                  { value: 'vv4a',      label: '💎 VV4A' },
+              ]
+            },
+        ]
+    },
+    {
         group: 'Ressourcen-Ziele (Anzeige)',
         fields: [
             { key: 'resource_targets.iron',      label: 'Eisen',       unit: '', scale: 1, decimals: 0 },
@@ -1090,6 +1116,22 @@ function renderGoalsForm(goals) {
                     </div>`;
                 }
 
+                // Multi-Checkbox-Felder (z.B. Pause-Toggles pro Ressource)
+                if (f.type === 'multi-checkbox' && f.options) {
+                    const current = Array.isArray(raw) ? raw : [];
+                    const boxes = f.options.map(o => {
+                        const checked = current.includes(o.value) ? 'checked' : '';
+                        return `<label class="pause-toggle">
+                            <input type="checkbox" class="goal-pause" data-field="${f.key}" value="${o.value}" ${checked}>
+                            ${o.label}
+                        </label>`;
+                    }).join('');
+                    return `<div class="goal-row" ${tip} style="align-items:flex-start;">
+                        <label>${f.label}</label>
+                        <div class="pause-toggles">${boxes}</div>
+                    </div>`;
+                }
+
                 // Numerische Felder (Standard)
                 const display = (raw * f.scale).toFixed(f.decimals);
                 return `<div class="goal-row" ${tip}>
@@ -1114,6 +1156,15 @@ function collectGoalsFromForm() {
     const patch = { resource_targets: {} };
     for (const group of GOAL_FIELDS) {
         for (const f of group.fields) {
+            // Multi-Checkbox: alle angehakten Werte als Array sammeln.
+            // Hat kein Einzel-Element mit inputId — direkt per data-field
+            // adressieren (muss VOR dem !el-Abbruch behandelt werden).
+            if (f.type === 'multi-checkbox') {
+                const boxes = document.querySelectorAll(`.goal-pause[data-field="${f.key}"]`);
+                patch[f.key] = Array.from(boxes).filter(b => b.checked).map(b => b.value);
+                continue;
+            }
+
             const inputId = 'goal_' + f.key.replace(/\./g, '_');
             const el = document.getElementById(inputId);
             if (!el) continue;

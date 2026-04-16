@@ -40,6 +40,12 @@ DEFAULTS: dict[str, Any] = {
     #                "ice", "water", "energy", "vv4a", "fp", "credits"
     "priority_resource": "balanced",
 
+    # Pausierte Ressourcen: für diese baut der Bot weder Lager noch
+    # Produktionsgebäude und überspringt sie auch bei Priorität/Balanced.
+    # Gültige Einträge: "iron", "steel", "chemicals", "ice", "water",
+    #                   "energy", "vv4a" (fp/credits bleiben immer aktiv).
+    "paused_resources": [],
+
     # Mindest-Ressourcenmengen (Display-Ziele im Dashboard, keine Bot-Logik)
     "resource_targets": {
         "iron":      0.0,
@@ -100,6 +106,8 @@ def update(patch: dict[str, Any]) -> dict[str, Any]:
     """Überschreibt einzelne Felder und speichert auf Disk.
 
     ``resource_targets`` wird tiefgehend gemergt, nicht ersetzt.
+    Listen-Felder (z. B. ``paused_resources``) werden komplett ersetzt —
+    genau das gewünschte Verhalten für UI-Toggles.
     Gibt die kompletten aktualisierten Ziele zurück.
     """
     with _lock:
@@ -144,3 +152,19 @@ def storage_threshold() -> float:
 
 def priority_resource() -> str:
     return str(get().get("priority_resource", DEFAULTS["priority_resource"]))
+
+
+def paused_resources() -> list[str]:
+    """Liste der aktuell pausierten Ressourcen (defensiv gefiltert auf gültige Strings)."""
+    raw = get().get("paused_resources", DEFAULTS["paused_resources"])
+    if not isinstance(raw, list):
+        return []
+    return [str(r) for r in raw if isinstance(r, str) and r]
+
+
+def is_resource_paused(resource: str) -> bool:
+    """True wenn der Bot für ``resource`` aktuell weder Lager noch Produktion
+    bauen soll. Unbekannte/leere Namen → False (kein Pausen-Effekt)."""
+    if not resource:
+        return False
+    return resource in paused_resources()
