@@ -198,6 +198,86 @@ class ActionExecutor:
     # Forschung
     # ------------------------------------------------------------------
 
+    async def _ensure_research_table_tab(self) -> bool:
+        """Stellt sicher, dass im Forschungs-View der 'Tabelle'-Tab aktiv ist.
+
+        Wenn stattdessen 'Tech-Baum' aktiv ist, rendert der View keine
+        ``<tr>``-Zeilen und der Forschungsstart schlägt fehl. Wir probieren
+        der Reihe nach mehrere Strategien durch, bis wieder Zeilen erscheinen.
+        """
+
+        async def has_table_rows() -> bool:
+            try:
+                rows = await self._page.query_selector_all("#view-research tr")
+                return len(rows) > 0
+            except Exception:
+                return False
+
+        if await has_table_rows():
+            return True
+
+        # 1) bekannte JS-Helfer des Spiels durchprobieren
+        js_candidates = [
+            "showResearchSubTab('table')",
+            "showResearchSubTab('tabelle')",
+            "showResearchSubTab('list')",
+            "showResearchTab('table')",
+            "showResearchTab('tabelle')",
+            "showResearchTab('list')",
+            "setResearchView('table')",
+            "researchShowTab('table')",
+            "switchResearchView('table')",
+        ]
+        for expr in js_candidates:
+            try:
+                await self._page.evaluate(expr)
+            except Exception:
+                continue
+            await asyncio.sleep(0.3)
+            if await has_table_rows():
+                logger.info("Research-Tab gewechselt via JS: %s", expr)
+                return True
+
+        # 2) generische DOM-Selektoren für den Tabelle-Tab/-Button
+        selector_candidates = [
+            "#view-research [data-tab='table']",
+            "#view-research [data-view='table']",
+            "#view-research .tab-table",
+            "#view-research .tab-tabelle",
+            "#btn-research-table",
+            "#btn-forschung-tabelle",
+            "#research-tab-table",
+        ]
+        for sel in selector_candidates:
+            try:
+                el = await self._page.query_selector(sel)
+                if not el:
+                    continue
+                await el.click()
+            except Exception:
+                continue
+            await asyncio.sleep(0.3)
+            if await has_table_rows():
+                logger.info("Research-Tab gewechselt via Selektor: %s", sel)
+                return True
+
+        # 3) Playwright text locator als letzte Option
+        try:
+            loc = self._page.locator("#view-research").get_by_text("Tabelle", exact=True).first
+            await loc.click(timeout=1500)
+            await asyncio.sleep(0.3)
+            if await has_table_rows():
+                logger.info("Research-Tab gewechselt via Text-Locator 'Tabelle'.")
+                return True
+        except Exception:
+            pass
+
+        logger.warning(
+            "Research-Tab konnte nicht auf 'Tabelle' gewechselt werden — "
+            "evtl. ist 'Tech-Baum' aktiv und es gibt keinen Wechsel-Hook."
+        )
+        return False
+
     async def _start_research(self, params: dict) -> bool:
         """Öffnet die Forschungs-Ansicht und startet die gewünschte Forschung.
 
@@ -210,6 +290,11 @@ class ActionExecutor:
         try:
             await self._page.click("#btn-forschung")
             await asyncio.sleep(1)
+
+            # Der Forschungs-View hat zwei Tabs: 'Tech-Baum' (Graph) und
+            # 'Tabelle' (Liste mit Start-Buttons). Nur im Tabelle-Tab sind
+            # <tr>-Zeilen vorhanden — ggf. umschalten.
+            await self._ensure_research_table_tab()
 
             # Alle Tabellenzeilen im Forschungs-View durchsuchen
             rows = await self._page.query_selector_all("#view-research tr")
