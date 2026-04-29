@@ -317,6 +317,62 @@ class GameScraper:
         import re
         return re.sub(r'\s*\(Bau:.*?\)', '', name).strip()
 
+    async def switch_to_city(self, city_id: int) -> bool:
+        """Wechselt im Spiel zur Kolonie mit der gegebenen ID.
+
+        Versucht zuerst bekannte JS-Funktionen, dann DOM-Selektoren.
+        Gibt True zurück wenn der Wechsel bestätigt wurde (API liefert neue city_id).
+        """
+        async def _confirm_switched() -> bool:
+            """True wenn /api/city/ jetzt city_id zurückgibt."""
+            try:
+                await asyncio.sleep(1.5)
+                check = await self._api_get("/api/city/")
+                return int(check.get("id", -1)) == city_id
+            except Exception:
+                return False
+
+        js_candidates = [
+            f"selectCity({city_id})",
+            f"switchCity({city_id})",
+            f"goToCity({city_id})",
+            f"City.select({city_id})",
+            f"Game.switchCity({city_id})",
+            f"app.selectCity({city_id})",
+            f"window.selectCity({city_id})",
+        ]
+        for expr in js_candidates:
+            try:
+                await self._page.evaluate(expr)
+                if await _confirm_switched():
+                    logger.info("Koloniewechsel zu %d via JS: %s", city_id, expr)
+                    return True
+            except Exception:
+                continue
+
+        # DOM-Fallback: Kolonie-Elemente suchen und klicken
+        dom_selectors = [
+            f"[data-city-id='{city_id}']",
+            f"[data-id='{city_id}']",
+            f".colony-item[data-id='{city_id}']",
+            f"#city-{city_id}",
+            f"a[href*='city={city_id}']",
+            f"a[href*='id={city_id}']",
+        ]
+        for sel in dom_selectors:
+            try:
+                el = await self._page.query_selector(sel)
+                if el:
+                    await el.click()
+                    if await _confirm_switched():
+                        logger.info("Koloniewechsel zu %d via DOM: %s", city_id, sel)
+                        return True
+            except Exception:
+                continue
+
+        logger.warning("Koloniewechsel zu %d fehlgeschlagen — kein passender JS/DOM-Einstieg.", city_id)
+        return False
+
     async def scrape(self) -> dict[str, Any]:
         """Holt Stadtdaten, Forschungsliste und aktiven Forschungsstatus."""
         logger.debug("Scrape läuft...")

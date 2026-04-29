@@ -136,6 +136,13 @@ class BotLoop:
         self._donated_resources: set[str] = set()      # Ressourcen über 95%-Schwelle (Spende bereits ausgelöst)
         self._last_auto_build_time: float = 0.0        # Zeitpunkt des letzten Auto-Builds
 
+        # Multi-Planet-Rotation
+        # _planet_cities: [{id, name, coords, ...}] – wird aus colonies-API befüllt
+        # Enthält immer auch die AKTUELLE Stadt (an Stelle _current_city_idx).
+        self._planet_cities: list[dict] = []
+        self._current_city_idx: int = 0
+        self._last_planet_switch: float = 0.0   # Unix-Timestamp des letzten Wechsels
+
     async def run(self) -> None:
         logger.info("Bot startet...")
         ts.set_status("starting")
@@ -537,6 +544,162 @@ class BotLoop:
             await self._notify(msg)
         self._last_rank = current_rank
 
+    # ── Multi-Planet-Rotation ─────────────────────────────────────────────────
+
+    _PLANET_SWITCH_INTERVAL_S: int = 37 * 60   # 37 Minuten
+
+    def _update_planet_list(self, current_city_id: int, colonies: list[dict]) -> None:
+        """Aktualisiert die bekannte Planetenliste aus den API-Koloniedaten.
+
+        ``colonies`` ist die Liste der ANDEREN Städte (aus city.colonies).
+        Die aktuelle Stadt wird anhand von ``current_city_id`` an der richtigen
+        Position in ``_planet_cities`` gehalten.
+
+        Neu erkannte Planeten werden gemeldet.
+        """
+        known_ids = {c.get("id") for c in self._planet_cities}
+        new_planet_ids = {c.get("id") for c in colonies} - known_ids - {current_city_id}
+
+        # Vollständige Liste: aktuelle Stadt + alle Kolonien
+        all_cities: list[dict] = []
+        # Aktuelle Stadt als minimalen Eintrag hinzufügen (wird beim nächsten
+        # Scrape durch echte Daten ersetzt)
+        current_entry: dict | None = next(
+            (c for c in self._planet_cities if c.get("id") == current_city_id),
+            None,
+        )
+        if current_entry is None:
+            current_entry = {"id": current_city_id}
+        all_cities.append(current_entry)
+
+        for col in colonies:
+            if isinstance(col, dict) and col.get("id"):
+                all_cities.append(col)
+
+        # Index der aktuellen Stadt in der neuen Liste ermitteln
+        old_current_id = (
+            self._planet_cities[self._current_city_idx].get("id")
+            if self._planet_cities else current_city_id
+        )
+        self._planet_cities = all_cities
+        # Aktuellen Index auf die Stadt setzen, die gerade aktiv ist
+        for i, c in enumerate(self._planet_cities):
+            if c.get("id") == current_city_id:
+                self._current_city_idx = i
+                break
+
+        if new_planet_ids:
+            names = [
+                next((c.get("name", str(pid)) for c in colonies if c.get("id") == pid), str(pid))
+                for pid in new_planet_ids
+            ]
+            logger.info("Neue Planeten/Kolonien entdeckt: %s", ", ".join(names))
+            asyncio.ensure_future(self._notify(
+                "🌍 <b>Neue Kolonie entdeckt!</b>\n" +
+                "\n".join(f"• {n}" for n in names)
+            ))
+
+    async def _maybe_switch_planet(self) -> bool:
+        """Wechselt zum nächsten Planeten wenn 37+ Minuten vergangen sind.
+
+        Gibt True zurück wenn gewechselt wurde (Caller soll dann einen
+        kurzen Extra-Sleep vor dem Scrape einlegen).
+        """
+        if len(self._planet_cities) <= 1:
+            return False
+
+        elapsed = time.time() - self._last_planet_switch
+        if elapsed < self._PLANET_SWITCH_INTERVAL_S:
+            return False
+
+        next_idx = (self._current_city_idx + 1) % len(self._planet_cities)
+        next_city = self._planet_cities[next_idx]
+        city_id = int(next_city.get("id", 0))
+        if not city_id:
+            return False
+
+        from_city = self._planet_cities[self._current_city_idx]
+        from_label = f"{from_city.get('name', '?')} ({from_city.get('coords', '?')})"
+        to_label = f"{next_city.get('name', '?')} ({next_city.get('coords', '?')})"
+        logger.info("Planet-Wechsel: %s → %s (ID %d)", from_label, to_label, city_id)
+
+        success = await self._scraper.switch_to_city(city_id)
+        if success:
+            self._current_city_idx = next_idx
+            self._last_planet_switch = time.time()
+            await self._notify(f"🪐 Planet-Wechsel: <b>{to_label}</b>")
+            return True
+
+        logger.warning("Planet-Wechsel zu %s fehlgeschlagen.", to_label)
+        return False
+
+    def _build_colony_snapshot(self, state: GameState) -> dict:
+        """Kompakter Status-Snapshot der aktuellen Stadt für das Dashboard."""
+        r = state.resources
+        cap = state.capacity
+        rt = state.rates
+
+        def fill(res: str) -> float:
+            c = getattr(cap, res, 0)
+            v = getattr(r, res, 0)
+            return round(v / c, 4) if c > 0 else 0.0
+
+        return {
+            "city_id":     state.city_id,
+            "city_name":   state.city_name,
+            "coords":      state.coords,
+            "planet_type": state.planet_type,
+            "points":      state.points,
+            "population_free": state.population_free,
+            "population_max":  state.population_max,
+            "satisfaction":    round(state.satisfaction, 3),
+            "resources": {
+                "iron":      round(r.iron),
+                "steel":     round(r.steel),
+                "chemicals": round(r.chemicals),
+                "ice":       round(r.ice),
+                "water":     round(r.water),
+                "energy":    round(r.energy),
+                "vv4a":      round(r.vv4a),
+                "credits":   round(r.credits, 1),
+                "fp":        round(r.fp),
+            },
+            "capacity": {
+                "iron":      round(cap.iron),
+                "steel":     round(cap.steel),
+                "chemicals": round(cap.chemicals),
+                "ice":       round(cap.ice),
+                "water":     round(cap.water),
+                "energy":    round(cap.energy),
+                "vv4a":      round(cap.vv4a),
+            },
+            "fill": {
+                "iron":      fill("iron"),
+                "steel":     fill("steel"),
+                "chemicals": fill("chemicals"),
+                "ice":       fill("ice"),
+                "water":     fill("water"),
+                "energy":    fill("energy"),
+                "vv4a":      fill("vv4a"),
+            },
+            "rates": {
+                "iron":      round(rt.iron),
+                "steel":     round(rt.steel),
+                "chemicals": round(rt.chemicals),
+                "ice":       round(rt.ice),
+                "water":     round(rt.water),
+                "energy":    round(rt.energy),
+                "vv4a":      round(rt.vv4a),
+                "credits":   round(rt.credits, 1),
+                "fp":        round(rt.fp),
+            },
+            "build_queue": [
+                {"name": b.name, "finish_time": b.finish_time, "remaining_sec": b.remaining_sec}
+                for b in state.build_queue
+            ],
+            "scraped_at": time.time(),
+        }
+
     def _colony_label(self, state: GameState) -> str:
         """Liefert einen sprechenden Kolonie-Namen für Benachrichtigungen.
 
@@ -811,10 +974,19 @@ class BotLoop:
 
     async def _run_turn(self) -> None:
         try:
+            # Planet-Rotation: vor dem Scrape wechseln (Pause damit Seite lädt)
+            switched = await self._maybe_switch_planet()
+            if switched:
+                await asyncio.sleep(3.0)
+
             raw = await self._scraper.scrape()
             state = parse_state(raw)
             self._last_state = state
             self._last_raw = raw
+
+            # Kolonieliste pflegen + Snapshot dieser Stadt speichern
+            self._update_planet_list(state.city_id, state.colonies)
+            ts.set_colony_snapshot(state.city_id, self._build_colony_snapshot(state))
 
             # Initialzustand beim ersten Scrape merken
             if self._stats.initial_resources is None:

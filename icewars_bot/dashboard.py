@@ -138,6 +138,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 })
             elif path == "/api/goals":
                 self._json_response(G.get())
+            elif path == "/api/colonies":
+                snapshots = ts.get_colonies_snapshots()
+                # Sortiert nach city_id für konsistente Reihenfolge
+                self._json_response(sorted(snapshots.values(), key=lambda c: c.get("city_id", 0)))
             else:
                 self.send_error(404, "Not Found")
         except Exception as e:

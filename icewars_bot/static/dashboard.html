@@ -406,6 +406,15 @@
         </div>
     </div>
 
+    <!-- ── Planeten-Übersicht ─────────────────────────────────────────────── -->
+    <div class="chart-card" style="margin:18px 24px; padding:16px;">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+            <h3 style="margin:0;">🪐 Planeten</h3>
+            <span id="colonies-info" style="font-size:0.72rem; color:var(--text-dim);">Warte auf Bot-Daten…</span>
+        </div>
+        <div id="colonies-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;"></div>
+    </div>
+
     <!-- Bau- & Forschungshistorie -->
     <div class="chart-card" style="margin:18px 0; padding:16px;">
         <h3 style="margin-bottom:12px;">Bau- &amp; Forschungshistorie</h3>
@@ -1054,6 +1063,13 @@ const GOAL_FIELDS = [
         ]
     },
     {
+        group: 'Forschung',
+        fields: [
+            { key: 'auto_research_enabled', label: 'Auto-Forschung aktiv', type: 'boolean',
+              tip: 'Wenn deaktiviert, startet der Bot keine neuen Forschungen' },
+        ]
+    },
+    {
         group: 'Ressourcen pausieren',
         fields: [
             { key: 'paused_resources', label: 'Pausierte Ressourcen', type: 'multi-checkbox',
@@ -1132,6 +1148,15 @@ function renderGoalsForm(goals) {
                     </div>`;
                 }
 
+                // Boolean-Felder (einfache Ja/Nein-Checkbox)
+                if (f.type === 'boolean') {
+                    const checked = raw === true || raw === 1 ? 'checked' : '';
+                    return `<div class="goal-row" ${tip}>
+                        <label>${f.label}</label>
+                        <input type="checkbox" class="goal-input goal-bool" id="${inputId}" ${checked}>
+                    </div>`;
+                }
+
                 // Numerische Felder (Standard)
                 const display = (raw * f.scale).toFixed(f.decimals);
                 return `<div class="goal-row" ${tip}>
@@ -1168,6 +1193,12 @@ function collectGoalsFromForm() {
             const inputId = 'goal_' + f.key.replace(/\./g, '_');
             const el = document.getElementById(inputId);
             if (!el) continue;
+
+            // Boolean-Felder: Checkbox-Status
+            if (f.type === 'boolean') {
+                patch[f.key] = el.checked;
+                continue;
+            }
 
             // Select-Felder: Wert direkt als String
             if (f.type === 'select') {
@@ -1291,6 +1322,81 @@ function renderScoringPanel(data) {
           `).join('')}
         </tbody>
       </table>`;
+}
+
+async function loadColonies() {
+    try {
+        const data = await fetch('/api/colonies').then(r => r.json());
+        renderColoniesPanel(data);
+    } catch (e) {
+        console.warn('Kolonien nicht verfügbar:', e);
+    }
+}
+
+function renderColoniesPanel(colonies) {
+    const grid = document.getElementById('colonies-grid');
+    const info = document.getElementById('colonies-info');
+    if (!grid) return;
+    if (!Array.isArray(colonies) || colonies.length === 0) {
+        grid.innerHTML = '<div style="color:var(--text-dim); font-size:0.82rem;">Noch keine Daten — Bot startet…</div>';
+        if (info) info.textContent = 'Keine Daten';
+        return;
+    }
+    if (info) info.textContent = `${colonies.length} Kolonie${colonies.length !== 1 ? 'n' : ''} · zuletzt aktualisiert ${new Date().toLocaleTimeString('de-DE')}`;
+
+    const resIcons = { iron: '⛏', steel: '🔩', chemicals: '🧪', ice: '🧊', water: '💧', energy: '⚡', vv4a: '💎' };
+    const resKeys = ['iron', 'steel', 'chemicals', 'ice', 'water', 'energy', 'vv4a'];
+
+    grid.innerHTML = colonies.map(c => {
+        const queueHtml = (c.build_queue || []).length
+            ? (c.build_queue || []).slice(0, 3).map(b => {
+                const rem = b.remaining_sec > 0
+                    ? ` (${b.remaining_sec < 3600 ? Math.ceil(b.remaining_sec/60)+'m' : Math.floor(b.remaining_sec/3600)+'h'+Math.ceil((b.remaining_sec%3600)/60)+'m'})`
+                    : '';
+                return `<div style="font-size:0.72rem; color:var(--text-dim);">🔨 ${b.name}${rem}</div>`;
+            }).join('')
+            : '<div style="font-size:0.72rem; color:var(--text-dim);">— leere Warteschlange</div>';
+
+        const barsHtml = resKeys.map(res => {
+            const fill = (c.fill || {})[res] ?? 0;
+            const pct = Math.round(fill * 100);
+            const val = ((c.resources || {})[res] ?? 0).toLocaleString('de-DE', {maximumFractionDigits:0});
+            const cap = ((c.capacity || {})[res] ?? 0).toLocaleString('de-DE', {maximumFractionDigits:0});
+            const rate = ((c.rates || {})[res] ?? 0);
+            const rateStr = rate !== 0 ? ` (${rate > 0 ? '+' : ''}${rate.toLocaleString('de-DE', {maximumFractionDigits:0})}/h)` : '';
+            const barColor = fill >= 0.90 ? '#ef5350' : fill >= 0.80 ? '#ffb300' : 'var(--accent)';
+            return `<div style="margin:3px 0;" title="${val} / ${cap}${rateStr}">
+                <div style="display:flex; justify-content:space-between; font-size:0.7rem; margin-bottom:2px;">
+                    <span>${resIcons[res]} ${res}</span>
+                    <span style="color:var(--text-dim);">${pct}%</span>
+                </div>
+                <div style="background:var(--border); border-radius:3px; height:5px; overflow:hidden;">
+                    <div style="height:100%; width:${pct}%; background:${barColor}; border-radius:3px; transition:width 0.5s;"></div>
+                </div>
+            </div>`;
+        }).join('');
+
+        const satPct = Math.round((c.satisfaction || 0) * 100);
+        const popFree = (c.population_free || 0).toLocaleString('de-DE');
+        const popMax  = (c.population_max  || 0).toLocaleString('de-DE');
+
+        return `<div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:14px;">
+            <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:8px;">
+                <div>
+                    <span style="font-weight:600; font-size:0.9rem;">${c.city_name || ('ID ' + c.city_id)}</span>
+                    <span style="font-size:0.72rem; color:var(--text-dim); margin-left:6px;">${c.coords || ''}</span>
+                </div>
+                <span style="font-size:0.7rem; color:var(--text-dim);">${c.planet_type || ''}</span>
+            </div>
+            <div style="display:flex; gap:12px; font-size:0.75rem; color:var(--text-dim); margin-bottom:8px;">
+                <span>👥 ${popFree} / ${popMax}</span>
+                <span>😊 ${satPct}%</span>
+                <span>🏆 ${(c.points||0).toLocaleString('de-DE')}</span>
+            </div>
+            ${barsHtml}
+            <div style="margin-top:8px; border-top:1px solid var(--border); padding-top:6px;">${queueHtml}</div>
+        </div>`;
+    }).join('');
 }
 
 async function togglePause() {
@@ -1652,6 +1758,8 @@ window.addEventListener('load', () => {
     loadTasks();
     setInterval(loadScoring, 10000);
     loadScoring();
+    setInterval(loadColonies, 15000);
+    loadColonies();
 });
 </script>
 </body>

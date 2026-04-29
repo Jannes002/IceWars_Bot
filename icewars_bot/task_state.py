@@ -78,6 +78,10 @@ class BotTaskState:
     seen_unknown_building_types: set = field(default_factory=set)
     seen_researched_types: set = field(default_factory=set)
 
+    # Kolonien-Snapshots: city_id → kompakter Status-Dict für das Dashboard.
+    # Wird nach jedem Scrape für die aktuelle Stadt aktualisiert.
+    colonies_snapshots: dict = field(default_factory=dict)
+
     def to_dict(self) -> dict:
         return {
             "bot_status": self.bot_status,
@@ -313,6 +317,18 @@ def mark_research_seen(rtype: str) -> bool:
             return False
         _state.seen_researched_types.add(rtype)
         return True
+
+
+def set_colony_snapshot(city_id: int, snapshot: dict) -> None:
+    """Aktualisiert den Kompakt-Status einer Kolonie (z.B. nach jedem Scrape)."""
+    with _lock:
+        _state.colonies_snapshots[city_id] = snapshot
+
+
+def get_colonies_snapshots() -> dict:
+    """Gibt alle gespeicherten Kolonien-Snapshots zurück (city_id → dict)."""
+    with _lock:
+        return dict(_state.colonies_snapshots)
 
 
 def initialize_seen_research(rtypes: list) -> None:

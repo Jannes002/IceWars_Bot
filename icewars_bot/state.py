@@ -152,6 +152,10 @@ class GameState:
     points: int = 0
     raw: dict = field(default_factory=dict, repr=False)
 
+    # Kolonieliste aus der API (alle Städte des Spielers).
+    # Jeder Eintrag hat mindestens: id, name, coords.
+    colonies: list = field(default_factory=list)
+
     @property
     def free_pop_ratio(self) -> float:
         """Freie Bevölkerung als Anteil der maximalen Bevölkerung (0.0 – 1.0)."""
@@ -263,6 +267,10 @@ def parse_state(raw: dict[str, Any]) -> GameState:
 
     research_lab_busy = bool(raw.get("research_lab_busy", active_research is not None))
 
+    # Kolonieliste (andere Städte des Spielers)
+    colonies_raw = city.get("colonies", [])
+    colonies = [dict(c) for c in colonies_raw if isinstance(c, dict)]
+
     return GameState(
         city_id=int(city.get("id", 0)),
         city_name=str(city.get("name", "")),
@@ -288,4 +296,5 @@ def parse_state(raw: dict[str, Any]) -> GameState:
         credits_rate=float(rates_raw.get("credits", 0)),
         points=int(city.get("points", 0)),
         raw=raw,
+        colonies=colonies,
     )
