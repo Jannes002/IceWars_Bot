@@ -1333,42 +1333,84 @@ async function loadColonies() {
     }
 }
 
-function renderColoniesPanel(colonies) {
+async function switchToPlanet(cityId) {
+    const btn = document.querySelector(`.colony-switch-btn[data-city-id="${cityId}"]`);
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Wechselt…'; }
+    try {
+        const res = await fetch('/api/switch-planet', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ city_id: cityId }),
+        });
+        if (res.ok) {
+            if (btn) { btn.textContent = '✓ Angefordert'; }
+            setTimeout(loadColonies, 5000);   // nach ~5 s neu laden
+        } else {
+            if (btn) { btn.disabled = false; btn.textContent = '🔄 Wechseln'; }
+        }
+    } catch (e) {
+        if (btn) { btn.disabled = false; btn.textContent = '🔄 Wechseln'; }
+        console.warn('Planet-Wechsel fehlgeschlagen:', e);
+    }
+}
+
+function renderColoniesPanel(data) {
     const grid = document.getElementById('colonies-grid');
     const info = document.getElementById('colonies-info');
     if (!grid) return;
-    if (!Array.isArray(colonies) || colonies.length === 0) {
+
+    // Neues Format: {current_city_id, colonies: [...]}
+    const currentId = (data && typeof data === 'object' && !Array.isArray(data))
+        ? (data.current_city_id || 0)
+        : 0;
+    const colonies = Array.isArray(data) ? data
+        : (data && Array.isArray(data.colonies) ? data.colonies : []);
+
+    if (colonies.length === 0) {
         grid.innerHTML = '<div style="color:var(--text-dim); font-size:0.82rem;">Noch keine Daten — Bot startet…</div>';
         if (info) info.textContent = 'Keine Daten';
         return;
     }
-    if (info) info.textContent = `${colonies.length} Kolonie${colonies.length !== 1 ? 'n' : ''} · zuletzt aktualisiert ${new Date().toLocaleTimeString('de-DE')}`;
+
+    const activeName = (colonies.find(c => c.city_id === currentId) || {}).city_name || '';
+    if (info) info.textContent =
+        `${colonies.length} Kolonie${colonies.length !== 1 ? 'n' : ''}` +
+        (activeName ? ` · Aktiv: ${activeName}` : '') +
+        ` · ${new Date().toLocaleTimeString('de-DE')}`;
 
     const resIcons = { iron: '⛏', steel: '🔩', chemicals: '🧪', ice: '🧊', water: '💧', energy: '⚡', vv4a: '💎' };
-    const resKeys = ['iron', 'steel', 'chemicals', 'ice', 'water', 'energy', 'vv4a'];
+    const resKeys  = ['iron', 'steel', 'chemicals', 'ice', 'water', 'energy', 'vv4a'];
 
     grid.innerHTML = colonies.map(c => {
+        const isActive = c.city_id === currentId;
+
+        // ── Warteschlange ──────────────────────────────────────────────────────
         const queueHtml = (c.build_queue || []).length
             ? (c.build_queue || []).slice(0, 3).map(b => {
                 const rem = b.remaining_sec > 0
-                    ? ` (${b.remaining_sec < 3600 ? Math.ceil(b.remaining_sec/60)+'m' : Math.floor(b.remaining_sec/3600)+'h'+Math.ceil((b.remaining_sec%3600)/60)+'m'})`
+                    ? ` (${b.remaining_sec < 3600
+                        ? Math.ceil(b.remaining_sec / 60) + 'm'
+                        : Math.floor(b.remaining_sec / 3600) + 'h' + Math.ceil((b.remaining_sec % 3600) / 60) + 'm'})`
                     : '';
                 return `<div style="font-size:0.72rem; color:var(--text-dim);">🔨 ${b.name}${rem}</div>`;
             }).join('')
             : '<div style="font-size:0.72rem; color:var(--text-dim);">— leere Warteschlange</div>';
 
+        // ── Ressourcen-Balken ─────────────────────────────────────────────────
         const barsHtml = resKeys.map(res => {
-            const fill = (c.fill || {})[res] ?? 0;
-            const pct = Math.round(fill * 100);
-            const val = ((c.resources || {})[res] ?? 0).toLocaleString('de-DE', {maximumFractionDigits:0});
-            const cap = ((c.capacity || {})[res] ?? 0).toLocaleString('de-DE', {maximumFractionDigits:0});
-            const rate = ((c.rates || {})[res] ?? 0);
-            const rateStr = rate !== 0 ? ` (${rate > 0 ? '+' : ''}${rate.toLocaleString('de-DE', {maximumFractionDigits:0})}/h)` : '';
+            const fill    = (c.fill      || {})[res] ?? 0;
+            const pct     = Math.round(fill * 100);
+            const val     = ((c.resources || {})[res] ?? 0).toLocaleString('de-DE', { maximumFractionDigits: 0 });
+            const cap     = ((c.capacity  || {})[res] ?? 0).toLocaleString('de-DE', { maximumFractionDigits: 0 });
+            const rate    = ((c.rates     || {})[res] ?? 0);
+            const rateStr = rate !== 0
+                ? ` (${rate > 0 ? '+' : ''}${rate.toLocaleString('de-DE', { maximumFractionDigits: 0 })}/h)`
+                : '';
             const barColor = fill >= 0.90 ? '#ef5350' : fill >= 0.80 ? '#ffb300' : 'var(--accent)';
             return `<div style="margin:3px 0;" title="${val} / ${cap}${rateStr}">
                 <div style="display:flex; justify-content:space-between; font-size:0.7rem; margin-bottom:2px;">
                     <span>${resIcons[res]} ${res}</span>
-                    <span style="color:var(--text-dim);">${pct}%</span>
+                    <span style="color:var(--text-dim);">${pct}%  <span style="font-variant-numeric:tabular-nums;">${val}</span></span>
                 </div>
                 <div style="background:var(--border); border-radius:3px; height:5px; overflow:hidden;">
                     <div style="height:100%; width:${pct}%; background:${barColor}; border-radius:3px; transition:width 0.5s;"></div>
@@ -1376,22 +1418,46 @@ function renderColoniesPanel(colonies) {
             </div>`;
         }).join('');
 
-        const satPct = Math.round((c.satisfaction || 0) * 100);
+        // ── Kopfzeile ─────────────────────────────────────────────────────────
+        const satPct  = Math.round((c.satisfaction || 0) * 100);
         const popFree = (c.population_free || 0).toLocaleString('de-DE');
         const popMax  = (c.population_max  || 0).toLocaleString('de-DE');
 
-        return `<div style="background:var(--bg-card); border:1px solid var(--border); border-radius:8px; padding:14px;">
-            <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:8px;">
-                <div>
-                    <span style="font-weight:600; font-size:0.9rem;">${c.city_name || ('ID ' + c.city_id)}</span>
-                    <span style="font-size:0.72rem; color:var(--text-dim); margin-left:6px;">${c.coords || ''}</span>
+        const activeBadge = isActive
+            ? `<span style="background:#1b5e20; color:#a5d6a7; font-size:0.65rem; font-weight:700;
+                            padding:2px 7px; border-radius:10px; letter-spacing:0.04em;">● AKTIV</span>`
+            : `<button class="btn colony-switch-btn" data-city-id="${c.city_id}"
+                       onclick="switchToPlanet(${c.city_id})"
+                       style="font-size:0.7rem; padding:3px 10px;">🔄 Wechseln</button>`;
+
+        const cardBorder = isActive
+            ? 'border:1px solid #388e3c; box-shadow:0 0 0 1px #388e3c22;'
+            : 'border:1px solid var(--border);';
+
+        // Zeitstempel der letzten Aktualisierung
+        const ageStr = c.scraped_at
+            ? (() => {
+                const ageS = Math.round(Date.now() / 1000 - c.scraped_at);
+                return ageS < 120 ? `${ageS}s` : ageS < 3600 ? `${Math.round(ageS/60)}m` : `${Math.floor(ageS/3600)}h`;
+              })()
+            : '?';
+
+        return `<div style="background:var(--bg-card); ${cardBorder} border-radius:8px; padding:14px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; gap:6px; flex-wrap:wrap;">
+                <div style="display:flex; align-items:baseline; gap:6px; min-width:0;">
+                    <span style="font-weight:600; font-size:0.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                        ${c.city_name || ('ID ' + c.city_id)}
+                    </span>
+                    <span style="font-size:0.72rem; color:var(--text-dim); white-space:nowrap;">${c.coords || ''}</span>
+                    <span style="font-size:0.68rem; color:var(--text-dim);">${c.planet_type || ''}</span>
                 </div>
-                <span style="font-size:0.7rem; color:var(--text-dim);">${c.planet_type || ''}</span>
+                ${activeBadge}
             </div>
-            <div style="display:flex; gap:12px; font-size:0.75rem; color:var(--text-dim); margin-bottom:8px;">
+            <div style="display:flex; gap:12px; font-size:0.75rem; color:var(--text-dim); margin-bottom:8px; flex-wrap:wrap;">
                 <span>👥 ${popFree} / ${popMax}</span>
                 <span>😊 ${satPct}%</span>
-                <span>🏆 ${(c.points||0).toLocaleString('de-DE')}</span>
+                <span>🏆 ${(c.points || 0).toLocaleString('de-DE')}</span>
+                <span style="margin-left:auto; font-size:0.68rem;">aktualisiert vor ${ageStr}</span>
             </div>
             ${barsHtml}
             <div style="margin-top:8px; border-top:1px solid var(--border); padding-top:6px;">${queueHtml}</div>

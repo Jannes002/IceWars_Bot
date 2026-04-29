@@ -974,10 +974,22 @@ class BotLoop:
 
     async def _run_turn(self) -> None:
         try:
-            # Planet-Rotation: vor dem Scrape wechseln (Pause damit Seite lädt)
-            switched = await self._maybe_switch_planet()
-            if switched:
-                await asyncio.sleep(3.0)
+            # Dashboard-gesteuerten Planet-Wechsel sofort ausführen (höchste Priorität)
+            requested_city = ts.consume_switch_planet_request()
+            if requested_city and requested_city != ts.get_current_city_id():
+                logger.info("Dashboard-Planet-Wechsel angefordert: city_id=%d", requested_city)
+                ok = await self._scraper.switch_to_city(requested_city)
+                if ok:
+                    # Rotation-Timer zurücksetzen damit der Bot nicht gleich wieder wechselt
+                    self._last_planet_switch = time.time()
+                    await asyncio.sleep(3.0)
+                else:
+                    logger.warning("Dashboard-Planet-Wechsel zu %d fehlgeschlagen.", requested_city)
+            else:
+                # Automatische Zeit-basierte Planet-Rotation
+                switched = await self._maybe_switch_planet()
+                if switched:
+                    await asyncio.sleep(3.0)
 
             raw = await self._scraper.scrape()
             state = parse_state(raw)
@@ -987,6 +999,7 @@ class BotLoop:
             # Kolonieliste pflegen + Snapshot dieser Stadt speichern
             self._update_planet_list(state.city_id, state.colonies)
             ts.set_colony_snapshot(state.city_id, self._build_colony_snapshot(state))
+            ts.set_current_city_id(state.city_id)
 
             # Initialzustand beim ersten Scrape merken
             if self._stats.initial_resources is None:

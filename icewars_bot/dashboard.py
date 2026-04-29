@@ -69,6 +69,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json_response(updated)
             elif parsed.path == "/api/goals/reset":
                 self._json_response(G.reset())
+            elif parsed.path == "/api/switch-planet":
+                city_id = int(data.get("city_id", 0))
+                if not city_id:
+                    self._json_response({"error": "city_id erforderlich"}, 400)
+                else:
+                    ts.request_switch_planet(city_id)
+                    logger.info("Planet-Wechsel angefordert via Dashboard: city_id=%d", city_id)
+                    self._json_response({"queued": True, "city_id": city_id})
             elif parsed.path == "/api/pause":
                 ts.set_paused(True)
                 logger.info("Bot pausiert via Dashboard.")
@@ -140,8 +148,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json_response(G.get())
             elif path == "/api/colonies":
                 snapshots = ts.get_colonies_snapshots()
-                # Sortiert nach city_id für konsistente Reihenfolge
-                self._json_response(sorted(snapshots.values(), key=lambda c: c.get("city_id", 0)))
+                self._json_response({
+                    "current_city_id": ts.get_current_city_id(),
+                    "colonies": sorted(snapshots.values(), key=lambda c: c.get("city_id", 0)),
+                })
             else:
                 self.send_error(404, "Not Found")
         except Exception as e:

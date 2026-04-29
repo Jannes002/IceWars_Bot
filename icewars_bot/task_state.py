@@ -82,6 +82,12 @@ class BotTaskState:
     # Wird nach jedem Scrape für die aktuelle Stadt aktualisiert.
     colonies_snapshots: dict = field(default_factory=dict)
 
+    # Aktuell aktive Stadt (für Dashboard-Hervorhebung)
+    current_city_id: int = 0
+
+    # Planet-Wechsel-Anfrage vom Dashboard: city_id oder None
+    switch_planet_request: Optional[int] = None
+
     def to_dict(self) -> dict:
         return {
             "bot_status": self.bot_status,
@@ -117,6 +123,7 @@ class BotTaskState:
             "execute_requested": self.execute_requested,
             "last_execute_result": self.last_execute_result,
             "donate_recommended": list(self.donate_recommended),
+            "current_city_id": self.current_city_id,
         }
 
 
@@ -329,6 +336,36 @@ def get_colonies_snapshots() -> dict:
     """Gibt alle gespeicherten Kolonien-Snapshots zurück (city_id → dict)."""
     with _lock:
         return dict(_state.colonies_snapshots)
+
+
+def set_current_city_id(city_id: int) -> None:
+    """Setzt die aktuell aktive Stadt (nach jedem Scrape aufrufen)."""
+    with _lock:
+        _state.current_city_id = city_id
+
+
+def get_current_city_id() -> int:
+    with _lock:
+        return _state.current_city_id
+
+
+def request_switch_planet(city_id: int) -> None:
+    """Vom Dashboard aufgerufen: stellt eine sofortige Planet-Wechsel-Anfrage."""
+    with _lock:
+        _state.switch_planet_request = city_id
+
+
+def consume_switch_planet_request() -> Optional[int]:
+    """Vom Bot-Loop aufgerufen. Gibt die angeforderte city_id zurück und löscht das Flag."""
+    with _lock:
+        city_id = _state.switch_planet_request
+        _state.switch_planet_request = None
+        return city_id
+
+
+def has_switch_planet_request() -> bool:
+    with _lock:
+        return _state.switch_planet_request is not None
 
 
 def initialize_seen_research(rtypes: list) -> None:
