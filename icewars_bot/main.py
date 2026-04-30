@@ -5,6 +5,7 @@ import asyncio
 import datetime
 import logging
 import logging.handlers
+import os
 import signal
 import sys
 import threading
@@ -19,6 +20,7 @@ from .dashboard import run_dashboard
 from .db import DB_PATH
 from .scraper import GameScraper
 from .strategy import Strategy
+from . import credentials as creds
 
 logger = logging.getLogger(__name__)
 
@@ -126,13 +128,44 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def run(args: argparse.Namespace) -> None:
-    if not args.config.exists():
-        print(f"Config file not found: {args.config}")
-        print("Copy config.example.toml to config.toml and fill in your credentials.")
-        sys.exit(1)
+def _start_dashboard_thread(port: int) -> None:
+    """Startet das Dashboard als Daemon-Thread."""
+    t = threading.Thread(
+        target=run_dashboard,
+        kwargs={"port": port, "db_path": DB_PATH},
+        daemon=True,
+        name="dashboard",
+    )
+    t.start()
+    logger.info("Dashboard läuft auf http://localhost:%d", port)
 
-    config = Config.load(args.config)
+
+async def _wait_for_credentials(poll_interval: float = 5.0) -> None:
+    """Blockiert bis Zugangsdaten über das Dashboard eingegeben wurden."""
+    logger.info(
+        "⚙️  SETUP-MODUS: Keine Konfiguration gefunden.\n"
+        "   Öffne http://localhost:8050 und gib deine Zugangsdaten ein."
+    )
+    while not creds.is_configured():
+        await asyncio.sleep(poll_interval)
+    logger.info("✅ Zugangsdaten gespeichert — Bot startet.")
+
+
+async def run(args: argparse.Namespace) -> None:
+    # Dashboard immer zuerst starten — auch im Setup-Modus
+    if args.dashboard:
+        _start_dashboard_thread(args.dashboard_port)
+
+    # Config-Quelle bestimmen: config.toml > data/credentials.json > Setup-Modus
+    if args.config.exists():
+        config = Config.load(args.config)
+    elif creds.is_configured():
+        logger.info("Lade Konfiguration aus data/credentials.json")
+        config = Config.load_from_credentials()
+    else:
+        # Kein Config → Setup-Modus: warten bis Dashboard genutzt wird
+        await _wait_for_credentials()
+        config = Config.load_from_credentials()
 
     if args.headless is not None:
         config.browser.headless = args.headless
@@ -165,17 +198,6 @@ async def run(args: argparse.Namespace) -> None:
             return
 
         bot = BotLoop(browser, scraper, strategy, executor, auth, config)
-
-        # Dashboard im Hintergrund-Thread starten
-        if args.dashboard:
-            dash_thread = threading.Thread(
-                target=run_dashboard,
-                kwargs={"port": args.dashboard_port, "db_path": DB_PATH},
-                daemon=True,
-                name="dashboard",
-            )
-            dash_thread.start()
-            logger.info("Dashboard laeuft auf http://localhost:%d", args.dashboard_port)
 
         # Handle Ctrl+C gracefully — auf Unix via Loop-Signalhandler,
         # auf Windows läuft asyncio.run() ohnehin sauber durch KeyboardInterrupt.
@@ -220,9 +242,33 @@ def _silence_windows_proactor_warnings() -> None:
     asyncio_logger.setLevel(logging.CRITICAL)
 
 
+def _bootstrap_credentials_from_env() -> None:
+    """Schreibt Umgebungsvariablen einmalig in credentials.json.
+
+    Wird beim Container-Start ausgeführt — falls ICEWARS_* gesetzt sind und
+    noch keine Credentials gespeichert sind, werden sie übertragen.
+    Bereits vorhandene credentials.json wird NICHT überschrieben.
+    """
+    env_map = {
+        "game_url":         os.environ.get("ICEWARS_GAME_URL", "").strip(),
+        "username":         os.environ.get("ICEWARS_USERNAME", "").strip(),
+        "password":         os.environ.get("ICEWARS_PASSWORD", "").strip(),
+        "telegram_token":   os.environ.get("ICEWARS_TG_TOKEN", "").strip(),
+        "telegram_chat_id": os.environ.get("ICEWARS_TG_CHAT_ID", "").strip(),
+    }
+    provided = {k: v for k, v in env_map.items() if v}
+    if not provided:
+        return
+    if creds.is_configured():
+        return  # Bereits konfiguriert — Env-Vars ignorieren
+    creds.save(provided)
+    logger.info("Credentials aus Umgebungsvariablen übernommen.")
+
+
 def main() -> None:
     debug_log = setup_logging()
     _silence_windows_proactor_warnings()
+    _bootstrap_credentials_from_env()
     args = parse_args()
     log = logging.getLogger(__name__)
     log.info("Debug-Log für Claude Code Upload: %s", debug_log.resolve())

@@ -1,0 +1,40 @@
+services:
+  icewars-bot:
+    build: .
+    image: icewars-bot:latest
+    container_name: icewars-bot
+
+    # Neustart bei Absturz — nicht bei manuellem docker stop
+    restart: unless-stopped
+
+    ports:
+      - "8050:8050"   # Dashboard
+
+    volumes:
+      # Persistente Daten: Credentials, Datenbank, Goals, Logs
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+    # Optionale Umgebungsvariablen (Alternativen zu credentials.json).
+    # Wenn gesetzt, überschreiben sie die Dashboard-Eingabe NICHT —
+    # sie werden beim Start einmalig in data/credentials.json geschrieben
+    # falls noch keine Credentials vorhanden sind.
+    # Für Prod-Deployments empfohlen: secrets über .env-Datei übergeben.
+    environment:
+      - ICEWARS_GAME_URL=${ICEWARS_GAME_URL:-}
+      - ICEWARS_USERNAME=${ICEWARS_USERNAME:-}
+      - ICEWARS_PASSWORD=${ICEWARS_PASSWORD:-}
+      - ICEWARS_TG_TOKEN=${ICEWARS_TG_TOKEN:-}
+      - ICEWARS_TG_CHAT_ID=${ICEWARS_TG_CHAT_ID:-}
+
+    # Shared-Memory für Chromium
+    shm_size: '256mb'
+
+    # Healthcheck: Dashboard antwortet
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8050/api/setup/status')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

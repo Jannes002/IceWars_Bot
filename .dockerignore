@@ -1,0 +1,36 @@
+# Credentials und Secrets — NIEMALS ins Image
+config.toml
+data/
+logs/
+.env
+*.env
+
+# Python-Artefakte
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# Tests + Entwicklung
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Dokumentation
+*.md
+!README.md

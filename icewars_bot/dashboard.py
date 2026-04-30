@@ -26,6 +26,7 @@ from .db import (
 from . import task_state as ts
 from . import goals as G
 from . import strategy as _strategy
+from . import credentials as creds
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/goals":
                 updated = G.update(data)
                 self._json_response(updated)
+            elif parsed.path == "/api/setup":
+                # Speichert Zugangsdaten — gibt NIE Passwörter/Tokens zurück
+                allowed = {"game_url", "username", "password",
+                           "telegram_token", "telegram_chat_id"}
+                filtered = {k: v for k, v in data.items() if k in allowed and isinstance(v, str)}
+                if not filtered:
+                    self._json_response({"error": "Keine gültigen Felder"}, 400)
+                else:
+                    creds.save(filtered)
+                    logger.info("Setup: Credentials aktualisiert via Dashboard.")
+                    self._json_response(creds.status())
             elif parsed.path == "/api/goals/reset":
                 self._json_response(G.reset())
             elif parsed.path == "/api/switch-planet":
@@ -146,6 +158,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 })
             elif path == "/api/goals":
                 self._json_response(G.get())
+            elif path == "/api/setup/status":
+                self._json_response(creds.status())
             elif path == "/api/colonies":
                 snapshots = ts.get_colonies_snapshots()
                 self._json_response({

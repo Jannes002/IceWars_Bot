@@ -52,6 +52,29 @@ class Config:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
 
     @classmethod
+    def load_from_credentials(cls) -> "Config":
+        """Lädt Config aus data/credentials.json (Docker/Dashboard-Setup-Pfad)."""
+        from . import credentials as creds
+        data = creds.load()
+        auth = AuthConfig(
+            username=data.get("username", ""),
+            password=data.get("password", ""),
+            game_url=data.get("game_url", "https://www.icewars.de"),
+        )
+        telegram = TelegramConfig(
+            enabled=bool(data.get("telegram_token", "").strip()),
+            token=data.get("telegram_token", ""),
+            chat_id=str(data.get("telegram_chat_id", "")),
+        )
+        return cls(
+            auth=auth,
+            browser=BrowserConfig(),
+            bot=BotConfig(),
+            strategy=StrategyConfig(),
+            telegram=telegram,
+        )
+
+    @classmethod
     def load(cls, path: Path) -> "Config":
         with open(path, "rb") as f:
             data = tomllib.load(f)

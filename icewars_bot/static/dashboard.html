@@ -292,6 +292,75 @@
     </style>
 </head>
 <body>
+
+    <!-- ══ SETUP-BANNER (nur sichtbar wenn Bot noch nicht konfiguriert) ══ -->
+    <div id="setup-banner" style="display:none; background:#1a237e; border-bottom:2px solid #3949ab; padding:0;">
+        <details id="setup-panel" open style="margin:0;">
+            <summary style="padding:14px 24px; cursor:pointer; font-weight:600; font-size:0.95rem;
+                            display:flex; align-items:center; gap:10px; list-style:none; color:#90caf9;">
+                ⚙️ Erstkonfiguration — Zugangsdaten eingeben
+                <span style="font-size:0.75rem; font-weight:400; color:#7986cb; margin-left:4px;">
+                    (nach dem Speichern werden Passwort und Token nie mehr angezeigt)
+                </span>
+            </summary>
+            <div style="padding:0 24px 20px; display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px;">
+                <div>
+                    <label style="display:block; font-size:0.78rem; color:#7986cb; margin-bottom:4px;">
+                        Spiel-URL *
+                    </label>
+                    <input id="setup-game-url" type="url" class="goal-input"
+                           placeholder="https://www.icewars.de" style="width:100%;">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.78rem; color:#7986cb; margin-bottom:4px;">
+                        Benutzername *
+                    </label>
+                    <input id="setup-username" type="text" class="goal-input"
+                           placeholder="dein_benutzername" style="width:100%;" autocomplete="username">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.78rem; color:#7986cb; margin-bottom:4px;">
+                        Passwort *
+                    </label>
+                    <input id="setup-password" type="password" class="goal-input"
+                           placeholder="••••••••" style="width:100%;" autocomplete="current-password">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.78rem; color:#7986cb; margin-bottom:4px;">
+                        Telegram Bot-Token <span style="opacity:.6">(optional)</span>
+                    </label>
+                    <input id="setup-tg-token" type="password" class="goal-input"
+                           placeholder="123456:ABC-DEF..." style="width:100%;">
+                </div>
+                <div>
+                    <label style="display:block; font-size:0.78rem; color:#7986cb; margin-bottom:4px;">
+                        Telegram Chat-ID <span style="opacity:.6">(optional)</span>
+                    </label>
+                    <input id="setup-tg-chat" type="text" class="goal-input"
+                           placeholder="-100123456789" style="width:100%;">
+                </div>
+                <div style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">
+                    <button class="btn" onclick="saveSetup()"
+                            style="background:#3949ab; border-color:#5c6bc0; color:#fff; font-weight:600;">
+                        💾 Zugangsdaten speichern &amp; Bot starten
+                    </button>
+                    <span id="setup-result" style="font-size:0.78rem;"></span>
+                </div>
+            </div>
+        </details>
+    </div>
+
+    <!-- ══ STATUS-BANNER wenn konfiguriert ══ -->
+    <div id="setup-configured" style="display:none; background:#1b5e20; border-bottom:1px solid #2e7d32;
+         padding:8px 24px; font-size:0.78rem; color:#a5d6a7; display:flex; align-items:center; gap:16px;">
+        <span>✅ Bot konfiguriert</span>
+        <span id="setup-user-info"></span>
+        <button class="btn" onclick="showSetupChange()"
+                style="font-size:0.72rem; padding:2px 10px; opacity:.7;">
+            🔑 Zugangsdaten ändern
+        </button>
+    </div>
+
     <header>
         <h1>Icewars Bot Dashboard</h1>
         <div class="controls">
@@ -1767,7 +1836,89 @@ window.addEventListener('load', () => {
     loadScoring();
     setInterval(loadColonies, 15000);
     loadColonies();
+    // Setup-Status beim Start laden
+    loadSetupStatus();
 });
+
+// ── Setup / Credential Management ─────────────────────────────────────────
+async function loadSetupStatus() {
+    try {
+        const s = await fetch('/api/setup/status').then(r => r.json());
+        renderSetupStatus(s);
+    } catch (e) {
+        // API nicht erreichbar — Banner ausblenden
+    }
+}
+
+function renderSetupStatus(s) {
+    const banner      = document.getElementById('setup-banner');
+    const configured  = document.getElementById('setup-configured');
+    const userInfo    = document.getElementById('setup-user-info');
+    if (!banner) return;
+
+    if (s.configured) {
+        banner.style.display = 'none';
+        if (configured) {
+            configured.style.display = 'flex';
+            if (userInfo) {
+                const tg = s.telegram_configured ? '· Telegram ✅' : '· Telegram nicht konfiguriert';
+                userInfo.textContent = `${s.username} @ ${s.game_url}  ${tg}`;
+            }
+        }
+    } else {
+        banner.style.display = 'block';
+        if (configured) configured.style.display = 'none';
+        // Gespeicherte Werte (nicht-geheime) vorausfüllen
+        const urlEl = document.getElementById('setup-game-url');
+        const userEl = document.getElementById('setup-username');
+        if (urlEl && s.game_url)  urlEl.value = s.game_url;
+        if (userEl && s.username) userEl.value = s.username;
+    }
+}
+
+async function saveSetup() {
+    const result = document.getElementById('setup-result');
+    const data = {
+        game_url:         document.getElementById('setup-game-url')?.value.trim()   || '',
+        username:         document.getElementById('setup-username')?.value.trim()   || '',
+        password:         document.getElementById('setup-password')?.value          || '',
+        telegram_token:   document.getElementById('setup-tg-token')?.value.trim()   || '',
+        telegram_chat_id: document.getElementById('setup-tg-chat')?.value.trim()    || '',
+    };
+    if (!data.game_url || !data.username || !data.password) {
+        if (result) result.textContent = '⚠️ Bitte URL, Benutzername und Passwort ausfüllen.';
+        if (result) result.style.color = '#ef5350';
+        return;
+    }
+    try {
+        const res = await fetch('/api/setup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        const s = await res.json();
+        if (res.ok && s.configured) {
+            // Passwort-Felder leeren — werden nie wieder angezeigt
+            document.getElementById('setup-password').value  = '';
+            document.getElementById('setup-tg-token').value  = '';
+            document.getElementById('setup-tg-chat').value   = '';
+            renderSetupStatus(s);
+            if (result) { result.textContent = '✅ Gespeichert — Bot startet gleich.'; result.style.color = '#66bb6a'; }
+        } else {
+            if (result) { result.textContent = '⚠️ ' + (s.error || 'Fehler beim Speichern.'); result.style.color = '#ef5350'; }
+        }
+    } catch (e) {
+        if (result) { result.textContent = '⚠️ Verbindungsfehler.'; result.style.color = '#ef5350'; }
+    }
+}
+
+function showSetupChange() {
+    // Zeigt das Formular erneut an (z.B. nach Passwort-Änderung)
+    const banner = document.getElementById('setup-banner');
+    const configured = document.getElementById('setup-configured');
+    if (banner) { banner.style.display = 'block'; document.getElementById('setup-panel').open = true; }
+    if (configured) configured.style.display = 'none';
+}
 </script>
 </body>
 </html>
