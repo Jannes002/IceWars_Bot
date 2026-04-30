@@ -1300,15 +1300,9 @@ async function loadLog(append = false) {
 
 function loadMoreLog() { loadLog(true); }
 
-function startLogAutoRefresh() {
-  if (_logRefreshTimer) clearInterval(_logRefreshTimer);
-  _logRefreshTimer = setInterval(() => {
-    const isLogTab = document.getElementById('tab-log').classList.contains('active');
-    if (isLogTab && _logAutoRefresh && _logOffset <= 50) {
-      _logOffset = 0;
-      loadLog(false);
-    }
-  }, 10000);
+function activeTab() {
+  const pane = document.querySelector('.tab-pane.active');
+  return pane ? pane.id.replace('tab-', '') : 'overview';
 }
 
 /* ── Planets ───────────────────────────────────────────────────────── */
@@ -1504,17 +1498,39 @@ async function saveCredentials() {
   } catch(e) { toast('Fehler beim Speichern', 'error'); }
 }
 
+/* ── Central tick ──────────────────────────────────────────────────── */
+let _tickCount = 0;
+
+async function tick() {
+  _tickCount++;
+  const tab = activeTab();
+
+  // Header status + planet-switch countdown — immer
+  await refreshStatus();
+
+  // Tab-spezifische Aktualisierungen
+  if (tab === 'overview') {
+    if (_tickCount % 4 === 0) loadCharts();   // alle 60s
+  } else if (tab === 'planets') {
+    await loadPlanets();
+  } else if (tab === 'log') {
+    if (_logAutoRefresh && _logOffset <= 50) {
+      _logOffset = 0;
+      loadLog(false);
+    }
+  }
+
+  // Rang alle 2 Minuten (unabhängig vom Tab)
+  if (_tickCount % 8 === 0) refreshRank();
+}
+
 /* ── Init ──────────────────────────────────────────────────────────── */
 async function init() {
   await refreshStatus();
-  await refreshRank();
+  refreshRank();
   loadCharts();
-  startLogAutoRefresh();
 
-  // Poll every 15s
-  setInterval(refreshStatus, 15000);
-  setInterval(refreshRank, 120000);
-  setInterval(loadCharts, 60000);
+  setInterval(tick, 15000);
 }
 
 init();
