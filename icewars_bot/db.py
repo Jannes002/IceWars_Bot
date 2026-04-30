@@ -40,6 +40,12 @@ def _connect(path: Path = DB_PATH):
 
 def init_db(path: Path = DB_PATH) -> None:
     """Erstellt die Datenbanktabellen falls sie nicht existieren."""
+    # Migration zuerst: city_id zu snapshots hinzufügen, bevor der Index darauf angelegt wird
+    with _connect(path) as conn:
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
+        if existing and "city_id" not in existing:
+            conn.execute("ALTER TABLE snapshots ADD COLUMN city_id INTEGER DEFAULT 0")
+            logger.info("Migration: snapshots.city_id hinzugefügt.")
     with _connect(path) as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS snapshots (
@@ -160,12 +166,6 @@ def init_db(path: Path = DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_activity_log_category
                 ON activity_log(category);
         """)
-    # Migration: city_id Spalte zu snapshots hinzufügen falls nicht vorhanden
-    with _connect(path) as conn:
-        existing = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
-        if "city_id" not in existing:
-            conn.execute("ALTER TABLE snapshots ADD COLUMN city_id INTEGER DEFAULT 0")
-            logger.info("Migration: snapshots.city_id hinzugefügt.")
     logger.info("Datenbank initialisiert: %s", path.resolve())
 
 
