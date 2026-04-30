@@ -726,6 +726,12 @@ class BotLoop:
                     break
             self._last_planet_switch = time.time()
             logger.info("Planet-Wechsel erfolgreich → %s", to_label)
+            record_activity(
+                "planet_switch",
+                f"Planet gewechselt → {to_label}",
+                f"von {from_label} · Grund: {reason}",
+                city_id=city_id,
+            )
             return True
 
         logger.warning("Planet-Wechsel zu %s (ID %d) fehlgeschlagen.", to_label, city_id)

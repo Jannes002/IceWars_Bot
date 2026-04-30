@@ -175,7 +175,8 @@
     /* ── Grid helpers ────────────────────────────────────────────────── */
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .grid-4 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-    @media (min-width: 640px) { .grid-4 { grid-template-columns: repeat(4, 1fr); } }
+    @media (min-width: 640px)  { .grid-4 { grid-template-columns: repeat(3, 1fr); } }
+    @media (min-width: 900px)  { .grid-4 { grid-template-columns: repeat(5, 1fr); } }
     @media (min-width: 1024px) { .grid-2 { grid-template-columns: 1fr 1fr 1fr; } }
     .gap-12 { gap: 12px; }
     .stack { display: flex; flex-direction: column; gap: 12px; }
@@ -571,10 +572,10 @@
         <div class="metric-value" id="m-turns">—</div>
         <div class="metric-sub" id="m-uptime">—</div>
       </div>
-      <div class="metric-card" id="m-planet-switch-card" style="display:none">
+      <div class="metric-card" id="m-planet-switch-card">
         <div class="metric-label">Nächster Wechsel</div>
         <div class="metric-value" id="m-planet-switch-time" style="font-size:1rem">—</div>
-        <div class="metric-sub" id="m-planet-switch-target" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</div>
+        <div class="metric-sub" id="m-planet-switch-target" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">wird berechnet…</div>
       </div>
     </div>
 
@@ -686,6 +687,7 @@
         <button class="filter-chip" data-cat="research_complete" style="--chip-color: var(--cyan)" onclick="setLogFilter(this, 'research_complete')">🔬 Forschung</button>
         <button class="filter-chip" data-cat="bot_session" style="--chip-color: var(--purple)" onclick="setLogFilter(this, 'bot_session')">▶ Sessions</button>
         <button class="filter-chip" data-cat="human_action" style="--chip-color: var(--amber)" onclick="setLogFilter(this, 'human_action')">👤 Spieler</button>
+        <button class="filter-chip" data-cat="planet_switch" style="--chip-color: #818cf8" onclick="setLogFilter(this, 'planet_switch')">🌍 Planeten</button>
         <button class="filter-chip" data-cat="error" style="--chip-color: var(--red)" onclick="setLogFilter(this, 'error')">⚠ Fehler</button>
       </div>
 
@@ -890,6 +892,7 @@ const CAT_META = {
   build_complete:     { color: '#34d399', label: 'Bau fertig',      icon: '🏗' },
   research_complete:  { color: '#22d3ee', label: 'Forschung fertig',icon: '🔬' },
   human_action:       { color: '#f59e0b', label: 'Spieler-Aktion',  icon: '👤' },
+  planet_switch:      { color: '#818cf8', label: 'Planet-Wechsel',  icon: '🌍' },
   error:              { color: '#f87171', label: 'Fehler',          icon: '⚠' },
 };
 
@@ -1012,14 +1015,19 @@ function updateStatusPill(tasks) {
 }
 
 function updatePlanetSwitchCard(tasks) {
-  const card = document.getElementById('m-planet-switch-card');
   const switchAt = tasks.next_planet_switch_at;
-  const target = tasks.next_planet_target;
-  if (!switchAt && !target) { card.style.display = 'none'; return; }
-  card.style.display = '';
-  const now = Date.now() / 1000;
+  const target   = tasks.next_planet_target;
+  const timeEl   = document.getElementById('m-planet-switch-time');
+
+  if (!switchAt && !target) {
+    timeEl.textContent = '—';
+    timeEl.style.color = 'var(--text)';
+    setText('m-planet-switch-target', 'wird berechnet…');
+    return;
+  }
+
+  const now  = Date.now() / 1000;
   const diff = switchAt ? Math.round(switchAt - now) : 0;
-  const timeEl = document.getElementById('m-planet-switch-time');
   if (diff <= 0) {
     timeEl.textContent = 'Bereit';
     timeEl.style.color = 'var(--green)';
