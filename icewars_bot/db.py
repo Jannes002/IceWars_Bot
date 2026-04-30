@@ -139,6 +139,21 @@ def init_db(path: Path = DB_PATH) -> None:
                 ON build_events(epoch);
             CREATE INDEX IF NOT EXISTS idx_build_events_type
                 ON build_events(event_type, type_key);
+
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp   TEXT    NOT NULL,
+                epoch       REAL    NOT NULL,
+                category    TEXT    NOT NULL,
+                title       TEXT    NOT NULL,
+                detail      TEXT    DEFAULT '',
+                city_id     INTEGER DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_activity_log_epoch
+                ON activity_log(epoch);
+            CREATE INDEX IF NOT EXISTS idx_activity_log_category
+                ON activity_log(category);
         """)
     logger.info("Datenbank initialisiert: %s", path.resolve())
 
@@ -450,6 +465,66 @@ def record_build_event(
             (now.isoformat(), epoch, event_type, type_key, name),
         )
     logger.debug("Build-Event: %s '%s' (%s)", event_type, name, type_key)
+
+
+# ── Activity Log ────────────────────────────────────────────────────────────
+
+def record_activity(
+    category: str,
+    title: str,
+    detail: str = "",
+    city_id: int = 0,
+    path: Path = DB_PATH,
+) -> None:
+    """Speichert einen Aktivitätseintrag.
+
+    Kategorien: bot_start | bot_stop | bot_pause | bot_resume |
+                bot_action | build_complete | research_complete |
+                human_action | error
+    """
+    now = datetime.now(timezone.utc)
+    epoch = time.time()
+    with _connect(path) as conn:
+        conn.execute(
+            "INSERT INTO activity_log (timestamp, epoch, category, title, detail, city_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (now.isoformat(), epoch, category, title, detail, city_id),
+        )
+    logger.debug("Activity: [%s] %s", category, title)
+
+
+def get_activity_log(
+    from_epoch: Optional[float] = None,
+    to_epoch: Optional[float] = None,
+    categories: Optional[list] = None,
+    limit: int = 200,
+    offset: int = 0,
+    path: Path = DB_PATH,
+) -> list[dict]:
+    """Gibt Aktivitätslog-Einträge zurück (neueste zuerst)."""
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if from_epoch is not None:
+        conditions.append("epoch >= ?")
+        params.append(from_epoch)
+    if to_epoch is not None:
+        conditions.append("epoch <= ?")
+        params.append(to_epoch)
+    if categories:
+        placeholders = ",".join("?" * len(categories))
+        conditions.append(f"category IN ({placeholders})")
+        params.extend(categories)
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    with _connect(path) as conn:
+        rows = conn.execute(
+            f"SELECT * FROM activity_log {where} ORDER BY epoch DESC LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+
+    return [dict(row) for row in rows]
 
 
 def get_build_events(

@@ -13,6 +13,7 @@ from .browser import BrowserManager
 from .config import Config
 from .db import (
     init_db, record_snapshot, record_highscores, record_build_event,
+    record_activity,
     start_session, end_session, get_last_stop_epoch, RECORD_INTERVAL_S,
 )
 from .scraper import GameScraper
@@ -150,6 +151,7 @@ class BotLoop:
         # Datenbank initialisieren
         init_db()
         self._session_id = start_session()
+        record_activity("bot_start", "Bot gestartet", f"Session #{self._session_id}")
 
         # Ausfallzeit ermitteln, bevor die neue Session startet
         last_stop = get_last_stop_epoch()
@@ -202,6 +204,10 @@ class BotLoop:
             self._end_db_session()
             self._log_final_status()
             ts.set_status("stopped")
+            record_activity(
+                "bot_stop", "Bot gestoppt",
+                f"{self._stats.turns_completed} Runden, {self._stats.actions_executed} Aktionen",
+            )
             logger.info("Bot gestoppt.")
             await self._browser.stop()
 
@@ -399,6 +405,7 @@ class BotLoop:
                 if text == "/stop":
                     ts.set_paused(True)
                     logger.info("Telegram: Bot pausiert via /stop")
+                    record_activity("bot_pause", "Bot pausiert", "via Telegram /stop")
                     await self._notify(
                         "⏸️ <b>Bot pausiert.</b>\n"
                         "Alle Entscheidungen werden ausgesetzt.\n"
@@ -407,6 +414,7 @@ class BotLoop:
                 elif text == "/start":
                     ts.set_paused(False)
                     logger.info("Telegram: Bot fortgesetzt via /start")
+                    record_activity("bot_resume", "Bot fortgesetzt", "via Telegram /start")
                     await self._notify("▶️ <b>Bot läuft wieder.</b>")
                 elif text == "/status":
                     logger.info("Telegram: Statusbericht angefordert via /status")
@@ -808,6 +816,10 @@ class BotLoop:
                 "Gebäude fertig: '%s'%s auf %s (finish_time=%s)",
                 name, level_part, colony, item.finish_time,
             )
+            record_activity(
+                "build_complete", f"{name}{level_part} fertig", colony,
+                city_id=state.city_id,
+            )
             await self._notify(
                 f"🏗️ <b>{name}</b>{level_part} auf {colony} ist fertig"
             )
@@ -852,6 +864,11 @@ class BotLoop:
                 elif r.unlocks_ships:
                     unlocks = "\nSchaltet frei: " + ", ".join(r.unlocks_ships)
                 logger.info("Neue Forschung abgeschlossen: %s", r.name)
+                record_activity(
+                    "research_complete", f"Forschung: {r.name}",
+                    unlocks.strip() if unlocks else "",
+                    city_id=state.city_id,
+                )
                 await self._notify(
                     f"✅ <b>Forschung abgeschlossen</b>\n{r.name}{unlocks}"
                 )
@@ -888,6 +905,9 @@ class BotLoop:
                 if btype:
                     cooldown.record_success(btype)
                 ts.set_recommended_action(None)
+                record_activity(
+                    "bot_action", task.label, (task.reason or "Dashboard-Ausführung"),
+                )
             else:
                 self._stats.actions_failed += 1
                 logger.warning("Dashboard-Aktion fehlgeschlagen: %s", action)
@@ -1127,6 +1147,10 @@ class BotLoop:
                 if success:
                     self._stats.actions_executed += 1
                     self._record_action_event(research)
+                    record_activity(
+                        "bot_action", task.label, task.reason or "Auto-Research",
+                        city_id=state.city_id,
+                    )
                     logger.info("Auto-Research gestartet: %s", task.label)
                 else:
                     self._stats.actions_failed += 1
@@ -1155,6 +1179,10 @@ class BotLoop:
                     self._last_auto_build_time = now
                     if btype:
                         cooldown.record_success(btype)
+                    record_activity(
+                        "bot_action", task.label, task.reason or "Auto-Build",
+                        city_id=state.city_id,
+                    )
                     logger.info("Auto-Build ausgeführt: %s", task.label)
                 else:
                     self._stats.actions_failed += 1
@@ -1184,6 +1212,7 @@ class BotLoop:
             logger.error("Runde fehlgeschlagen (%d/%d): %s",
                          self._consecutive_failures, self._config.bot.max_retries,
                          type(e).__name__)
+            record_activity("error", f"Fehler: {type(e).__name__}", str(e))
 
             if self._consecutive_failures >= self._config.bot.max_retries:
                 logger.warning("Max. Fehler erreicht — Browser-Neustart.")

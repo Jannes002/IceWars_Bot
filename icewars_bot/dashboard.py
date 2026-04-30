@@ -20,7 +20,7 @@ from urllib.parse import urlparse, parse_qs
 from .db import (
     get_snapshots, get_sessions, get_latest_snapshot, get_snapshot_count,
     get_highscores, get_highscore_timeline, get_latest_highscore,
-    get_build_events,
+    get_build_events, get_activity_log, record_activity,
     DB_PATH,
 )
 from . import task_state as ts
@@ -92,10 +92,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/pause":
                 ts.set_paused(True)
                 logger.info("Bot pausiert via Dashboard.")
+                record_activity("bot_pause", "Bot pausiert", "via Dashboard")
                 self._json_response({"paused": True})
             elif parsed.path == "/api/resume":
                 ts.set_paused(False)
                 logger.info("Bot fortgesetzt via Dashboard.")
+                record_activity("bot_resume", "Bot fortgesetzt", "via Dashboard")
                 self._json_response({"paused": False})
             elif parsed.path == "/api/execute":
                 success = ts.request_execute()
@@ -146,6 +148,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._api_highscore_latest(qs)
             elif path == "/api/build-events":
                 self._api_build_events(qs)
+            elif path == "/api/activity-log":
+                self._api_activity_log(qs)
             elif path == "/api/tasks":
                 self._json_response(ts.get())
             elif path == "/api/scoring":
@@ -227,6 +231,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _api_highscore_latest(self, qs: dict) -> None:
         category = qs.get("category", ["points"])[0]
         data = get_latest_highscore(category, self.db_path)
+        self._json_response(data)
+
+    def _api_activity_log(self, qs: dict) -> None:
+        from_epoch = float(qs["from"][0]) if "from" in qs else None
+        to_epoch = float(qs["to"][0]) if "to" in qs else None
+        categories = qs["category"][0].split(",") if "category" in qs else None
+        limit = int(qs.get("limit", [200])[0])
+        offset = int(qs.get("offset", [0])[0])
+        data = get_activity_log(from_epoch, to_epoch, categories, limit, offset, self.db_path)
         self._json_response(data)
 
     def _api_build_events(self, qs: dict) -> None:
