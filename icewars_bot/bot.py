@@ -357,21 +357,10 @@ class BotLoop:
             if ratio < self._RES_LOW_THRESHOLD and res not in self._low_resources:
                 self._low_resources.add(res)
                 logger.warning("Ressource niedrig: %s %.0f%%", res, ratio * 100)
-                await self._notify(
-                    f"📉 <b>Lager fast leer: {label}</b>\n"
-                    f"{current_val:,} / {cap_val:,}  ({pct} %)\n"
-                    f"Produktion: {rate_str}"
-                )
 
             elif ratio >= self._RES_OK_THRESHOLD and res in self._low_resources:
-                # Wieder über 20 % → Entwarnung
                 self._low_resources.discard(res)
                 logger.info("Ressource erholt: %s %.0f%%", res, ratio * 100)
-                await self._notify(
-                    f"📈 <b>Lager wieder gefüllt: {label}</b>\n"
-                    f"{current_val:,} / {cap_val:,}  ({pct} %)\n"
-                    f"Produktion: {rate_str}"
-                )
 
             # ── Hoher Füllstand (>95 %) → Spendenempfehlung ins Dashboard ──
             if ratio > self._RES_HIGH_THRESHOLD and res not in self._donated_resources:
@@ -381,12 +370,6 @@ class BotLoop:
                 self._donated_resources.add(res)
                 logger.info("Allianz-Spende empfohlen: %s %d (%.0f%% voll)", res, donate_amount, pct)
                 ts.add_donate_recommended(res, donate_amount, label, pct)
-                await self._notify(
-                    f"⚠️ <b>Lager fast voll: {label}</b>\n"
-                    f"{current_val:,} / {cap_val:,}  ({pct} %)\n"
-                    f"Empfohlene Spende: {donate_amount:,}\n"
-                    f"Im Dashboard bestätigen."
-                )
 
             elif ratio < self._RES_DONATE_RESET and res in self._donated_resources:
                 # Unter 85 % gefallen → Empfehlung zurückziehen
