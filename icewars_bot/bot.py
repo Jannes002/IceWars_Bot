@@ -529,7 +529,10 @@ class BotLoop:
 
     # ── Multi-Planet-Rotation ─────────────────────────────────────────────────
 
-    _PLANET_SWITCH_INTERVAL_S: int = 37 * 60   # 37 Minuten
+    # Minimale Pause zwischen zwei Wechseln (verhindert Thrashing)
+    _PLANET_MIN_INTERVAL_S: int = 5 * 60        # 5 Minuten
+    # Spätestens nach dieser Zeit einen nicht besuchten Planeten anschauen
+    _PLANET_IDLE_VISIT_S:   int = 25 * 60       # 25 Minuten
 
     def _update_planet_list(self, current_city_id: int, colonies: list[dict]) -> None:
         """Aktualisiert die bekannte Planetenliste aus den API-Koloniedaten.
@@ -583,37 +586,100 @@ class BotLoop:
             ))
 
     async def _maybe_switch_planet(self) -> bool:
-        """Wechselt zum nächsten Planeten wenn 37+ Minuten vergangen sind.
+        """Prüft ob ein Planetenwechsel sinnvoll ist und führt ihn aus.
 
-        Gibt True zurück wenn gewechselt wurde (Caller soll dann einen
-        kurzen Extra-Sleep vor dem Scrape einlegen).
+        Prioritäten (höchste zuerst):
+        1. Dashboard-Anfrage (Nutzer klickte "Wechseln"-Button)
+        2. Freier Bauplatz auf anderem Planeten (Build-Queue leer oder gerade frei geworden)
+        3. Planet wurde länger als _PLANET_IDLE_VISIT_S nicht besucht (Gelegenheitscheck)
+
+        Zwischen zwei Wechseln gilt immer eine Mindestpause von _PLANET_MIN_INTERVAL_S.
+        Gibt True zurück wenn gewechselt wurde.
         """
         if len(self._planet_cities) <= 1:
             return False
 
-        elapsed = time.time() - self._last_planet_switch
-        if elapsed < self._PLANET_SWITCH_INTERVAL_S:
+        now = time.time()
+        if now - self._last_planet_switch < self._PLANET_MIN_INTERVAL_S:
             return False
 
-        next_idx = (self._current_city_idx + 1) % len(self._planet_cities)
-        next_city = self._planet_cities[next_idx]
-        city_id = int(next_city.get("id", 0))
-        if not city_id:
-            return False
+        current_id = self._planet_cities[self._current_city_idx].get("id", 0)
 
-        from_city = self._planet_cities[self._current_city_idx]
+        # ── Priorität 0: explizite Dashboard-Anfrage ──────────────────────────
+        requested_city = ts.consume_switch_planet_request()
+        if requested_city and requested_city != current_id:
+            return await self._do_switch_planet(requested_city, reason="Dashboard-Anfrage")
+        elif requested_city:
+            return False   # bereits auf dem gewünschten Planeten
+
+        # ── Priorität 1: Build-Queue frei geworden ────────────────────────────
+        # "_build_free_at" ist der Timestamp wann die Warteschlange leer wird.
+        # 0 bedeutet: Queue war beim letzten Scrape schon leer → Bauplatz frei.
+        best_free: tuple[int, dict] | None = None   # (idx, city)
+        for i, city in enumerate(self._planet_cities):
+            if city.get("id") == current_id:
+                continue
+            build_free_at = city.get("_build_free_at", 0)
+            last_visited  = city.get("_last_visited", 0)
+            if build_free_at == 0 and last_visited > 0:
+                # Queue war leer als wir zuletzt dort waren — prüfen ob Bausloterr neu
+                # Wir besuchen diesen Planeten erst wenn er auch "alt genug" ist
+                if now - last_visited >= self._PLANET_IDLE_VISIT_S:
+                    best_free = (i, city)
+                    break
+            elif build_free_at > 0 and build_free_at <= now:
+                # Build gerade fertig geworden seit letztem Besuch
+                if last_visited < build_free_at:
+                    best_free = (i, city)
+                    break
+
+        if best_free:
+            idx, city = best_free
+            reason = "Bauplatz frei"
+            return await self._do_switch_planet(int(city.get("id", 0)), reason=reason)
+
+        # ── Priorität 2: Idle-Check — Planet lange nicht besucht ─────────────
+        # Wähle den am längsten nicht besuchten Planeten (round-robin als Fallback)
+        oldest_visited = now
+        oldest_city: dict | None = None
+        oldest_idx = -1
+        for i, city in enumerate(self._planet_cities):
+            if city.get("id") == current_id:
+                continue
+            last_visited = city.get("_last_visited", 0)
+            if last_visited < oldest_visited:
+                oldest_visited = last_visited
+                oldest_city = city
+                oldest_idx = i
+
+        if oldest_city and (now - oldest_visited) >= self._PLANET_IDLE_VISIT_S:
+            reason = f"Idle-Check (vor {int((now - oldest_visited) / 60)} min zuletzt besucht)"
+            return await self._do_switch_planet(int(oldest_city.get("id", 0)), reason=reason)
+
+        return False
+
+    async def _do_switch_planet(self, city_id: int, reason: str = "") -> bool:
+        """Führt den eigentlichen Planetenwechsel durch und aktualisiert Tracking-Daten."""
+        from_city = self._planet_cities[self._current_city_idx] if self._planet_cities else {}
+        to_city   = next((c for c in self._planet_cities if c.get("id") == city_id), {})
+
         from_label = f"{from_city.get('name', '?')} ({from_city.get('coords', '?')})"
-        to_label = f"{next_city.get('name', '?')} ({next_city.get('coords', '?')})"
-        logger.info("Planet-Wechsel: %s → %s (ID %d)", from_label, to_label, city_id)
+        to_label   = f"{to_city.get('name', '?')} ({to_city.get('coords', '?')})"
+
+        logger.info("Planet-Wechsel: %s → %s [%s] (ID %d)", from_label, to_label, reason, city_id)
 
         success = await self._scraper.switch_to_city(city_id)
         if success:
-            self._current_city_idx = next_idx
+            # Index aktualisieren
+            for i, c in enumerate(self._planet_cities):
+                if c.get("id") == city_id:
+                    self._current_city_idx = i
+                    break
             self._last_planet_switch = time.time()
-            await self._notify(f"🪐 Planet-Wechsel: <b>{to_label}</b>")
+            logger.info("Planet-Wechsel erfolgreich → %s", to_label)
             return True
 
-        logger.warning("Planet-Wechsel zu %s fehlgeschlagen.", to_label)
+        logger.warning("Planet-Wechsel zu %s (ID %d) fehlgeschlagen.", to_label, city_id)
         return False
 
     def _build_colony_snapshot(self, state: GameState) -> dict:
@@ -957,22 +1023,10 @@ class BotLoop:
 
     async def _run_turn(self) -> None:
         try:
-            # Dashboard-gesteuerten Planet-Wechsel sofort ausführen (höchste Priorität)
-            requested_city = ts.consume_switch_planet_request()
-            if requested_city and requested_city != ts.get_current_city_id():
-                logger.info("Dashboard-Planet-Wechsel angefordert: city_id=%d", requested_city)
-                ok = await self._scraper.switch_to_city(requested_city)
-                if ok:
-                    # Rotation-Timer zurücksetzen damit der Bot nicht gleich wieder wechselt
-                    self._last_planet_switch = time.time()
-                    await asyncio.sleep(3.0)
-                else:
-                    logger.warning("Dashboard-Planet-Wechsel zu %d fehlgeschlagen.", requested_city)
-            else:
-                # Automatische Zeit-basierte Planet-Rotation
-                switched = await self._maybe_switch_planet()
-                if switched:
-                    await asyncio.sleep(3.0)
+            # Planet-Rotation: Dashboard-Anfragen + smart buildqueue-aware Switching
+            switched = await self._maybe_switch_planet()
+            if switched:
+                await asyncio.sleep(3.0)
 
             raw = await self._scraper.scrape()
             state = parse_state(raw)
@@ -983,6 +1037,19 @@ class BotLoop:
             self._update_planet_list(state.city_id, state.colonies)
             ts.set_colony_snapshot(state.city_id, self._build_colony_snapshot(state))
             ts.set_current_city_id(state.city_id)
+
+            # Build-Tracking: wann wird der letzte Bauplatz dieser Stadt frei?
+            # 0 = Queue ist leer (Platz sofort frei), >0 = Unix-Timestamp
+            max_remaining = max(
+                (b.remaining_sec for b in state.build_queue if b.remaining_sec > 0),
+                default=0,
+            )
+            build_free_at = (time.time() + max_remaining) if max_remaining > 0 else 0
+            for city in self._planet_cities:
+                if city.get("id") == state.city_id:
+                    city["_build_free_at"] = build_free_at
+                    city["_last_visited"]  = time.time()
+                    break
 
             # Initialzustand beim ersten Scrape merken
             if self._stats.initial_resources is None:

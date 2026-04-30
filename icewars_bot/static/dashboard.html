@@ -415,17 +415,6 @@
         <div id="colonies-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px;"></div>
     </div>
 
-    <!-- Bau- & Forschungshistorie -->
-    <div class="chart-card" style="margin:18px 0; padding:16px;">
-        <h3 style="margin-bottom:12px;">Bau- &amp; Forschungshistorie</h3>
-        <div style="display:flex; gap:10px; margin-bottom:10px;">
-            <button id="build-filter-all" class="btn btn-active" onclick="setBuildFilter('all')">Alle</button>
-            <button id="build-filter-build" class="btn" onclick="setBuildFilter('build')">Bauten</button>
-            <button id="build-filter-research" class="btn" onclick="setBuildFilter('research')">Forschung</button>
-        </div>
-        <div id="build-events-list" style="max-height:320px; overflow-y:auto;"></div>
-    </div>
-
     <div class="kpi-row" id="kpi-row"></div>
 
     <div class="session-legend">
@@ -641,7 +630,7 @@ async function loadData() {
 
         updateKPIs();
         updateAllCharts();
-        await Promise.all([loadHighscores(), loadTasks(), loadGoals(), loadBuildEvents()]);
+        await Promise.all([loadHighscores(), loadTasks(), loadGoals()]);
     } catch (e) {
         console.error('Load error:', e);
     }
@@ -1688,56 +1677,6 @@ function renderDonateRecommendations(recommendations) {
         </div>`).join('');
 }
 
-// ── Build / Research History ───────────────────────────────────────────────
-let _buildFilter = 'all';
-
-function setBuildFilter(f) {
-    _buildFilter = f;
-    document.querySelectorAll('[id^="build-filter-"]').forEach(b => b.classList.remove('btn-active'));
-    const btn = document.getElementById('build-filter-' + f);
-    if (btn) btn.classList.add('btn-active');
-    loadBuildEvents();
-}
-
-async function loadBuildEvents() {
-    const qs = rangeFrom ? `?from=${rangeFrom}&to=${rangeTo}` : '';
-    const typeFilter = _buildFilter !== 'all' ? `${qs ? '&' : '?'}type=${_buildFilter}` : '';
-    const url = `/api/build-events${qs}${typeFilter}`;
-    let events;
-    try { events = await fetch(url).then(r => r.json()); } catch { return; }
-
-    const el = document.getElementById('build-events-list');
-    if (!events || !events.length) {
-        el.innerHTML = '<div style="color:var(--text-dim);font-size:0.82rem;">Keine Einträge im Zeitraum.</div>';
-        return;
-    }
-
-    el.innerHTML = `
-        <table style="width:100%; border-collapse:collapse; font-size:0.82rem;">
-            <thead>
-                <tr style="color:var(--text-dim); border-bottom:1px solid var(--border);">
-                    <th style="text-align:left; padding:4px 8px;">Zeit</th>
-                    <th style="text-align:left; padding:4px 8px;">Typ</th>
-                    <th style="text-align:left; padding:4px 8px;">Name</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${events.map(e => {
-                    const ts = new Date(e.timestamp).toLocaleString('de-DE', {
-                        day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'
-                    });
-                    const badge = e.event_type === 'build'
-                        ? `<span class="queue-badge build">Bau</span>`
-                        : `<span class="queue-badge research">Labor</span>`;
-                    return `<tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
-                        <td style="padding:4px 8px; color:var(--text-dim);">${ts}</td>
-                        <td style="padding:4px 8px;">${badge}</td>
-                        <td style="padding:4px 8px;">${e.name || e.type_key || '—'}</td>
-                    </tr>`;
-                }).join('')}
-            </tbody>
-        </table>`;
-}
 
 // ── Highscore Tables ───────────────────────────────────────────────────────
 function updateHighscoreTables() {
