@@ -1,18 +1,17 @@
 services:
   icewars-bot:
-    image: ghcr.io/jannes002/icewars-bot:latest
+    build:
+      context: https://github.com/Jannes002/IceWars_Bot.git
     container_name: icewars-bot
     restart: unless-stopped
 
     ports:
-      - "8050:8050"   # Dashboard — im Browser öffnen um den Bot zu konfigurieren
+      - "8050:8050"
 
     volumes:
-      # Unraid: /mnt/user/appdata/icewars-bot/ als Basis empfohlen
-      - /mnt/user/appdata/icewars-bot/data:/app/data   # Credentials, DB, Goals
-      - /mnt/user/appdata/icewars-bot/logs:/app/logs   # Log-Dateien
+      - /mnt/user/appdata/icewars-bot/data:/app/data
+      - /mnt/user/appdata/icewars-bot/logs:/app/logs
 
-    # Chromium braucht ausreichend Shared Memory
     shm_size: '256mb'
 
     healthcheck:
