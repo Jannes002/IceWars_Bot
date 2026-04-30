@@ -176,12 +176,13 @@ class BotLoop:
         logger.info("Hauptschleife aktiv. Stoppen mit Ctrl+C.")
         try:
             # Status-Reporter, DB-Recorder und Auth-Checker als parallele Tasks
-            status_task = asyncio.create_task(self._status_reporter())
-            db_task = asyncio.create_task(self._db_recorder())
-            auth_task = asyncio.create_task(self._auth_checker())
-            daily_task = asyncio.create_task(self._daily_reporter())
-            tg_task = asyncio.create_task(self._telegram_listener())
-            res_task = asyncio.create_task(self._resource_monitor())
+            status_task  = asyncio.create_task(self._status_reporter())
+            db_task      = asyncio.create_task(self._db_recorder())
+            auth_task    = asyncio.create_task(self._auth_checker())
+            daily_task   = asyncio.create_task(self._daily_reporter())
+            tg_task      = asyncio.create_task(self._telegram_listener())
+            res_task     = asyncio.create_task(self._resource_monitor())
+            planet_task  = asyncio.create_task(self._hourly_planet_scan())
             try:
                 while True:
                     await self._run_turn()
@@ -194,7 +195,7 @@ class BotLoop:
                             logger.debug("Vorzeitiger Wake-up durch Dashboard-Anfrage")
                             break
             finally:
-                for t in (status_task, db_task, auth_task, daily_task, tg_task, res_task):
+                for t in (status_task, db_task, auth_task, daily_task, tg_task, res_task, planet_task):
                     t.cancel()
                     try:
                         await t
@@ -386,6 +387,67 @@ class BotLoop:
                 self._donated_resources.discard(res)
                 ts.clear_donate_recommended(res)
                 logger.debug("Spende-Reset: %s (%.0f%%)", res, ratio * 100)
+
+    _PLANET_SCAN_INTERVAL_S: int = 3600  # stündlich
+
+    async def _hourly_planet_scan(self) -> None:
+        """Prüft stündlich ob neue Planeten/Kolonien im Spiel vorhanden sind.
+
+        Vergleich über Koordinaten — ein Planet ist eindeutig an seinen
+        Koordinaten erkennbar (z.B. '1:19:14').
+        """
+        # Erste Prüfung erst nach einer Stunde, nicht beim Start
+        await asyncio.sleep(self._PLANET_SCAN_INTERVAL_S)
+        while True:
+            state = self._last_state
+            if state is not None:
+                known_coords = {
+                    c.get("coords", "").strip()
+                    for c in self._planet_cities
+                    if c.get("coords")
+                }
+                new_planets: list[dict] = []
+                all_colonies = list(state.colonies or [])
+                # aktuelle Stadt auch prüfen
+                if state.coords and state.city_id:
+                    all_colonies.append({
+                        "id": state.city_id,
+                        "name": state.city_name or "",
+                        "coords": state.coords,
+                    })
+
+                for col in all_colonies:
+                    coords = (col.get("coords") or "").strip()
+                    city_id = col.get("id")
+                    if not coords or not city_id:
+                        continue
+                    if city_id in self._excluded_planet_ids:
+                        continue
+                    if coords not in known_coords:
+                        new_planets.append(col)
+                        known_coords.add(coords)
+
+                count = len(self._planet_cities)
+                record_activity(
+                    "bot_action",
+                    f"Planeten-Check: {count} bekannt",
+                    f"{len(new_planets)} neu entdeckt" if new_planets else "keine neuen Planeten",
+                )
+
+                if new_planets:
+                    names = [
+                        f"{c.get('name', 'Unbekannt')} ({c.get('coords', '?')})"
+                        for c in new_planets
+                    ]
+                    logger.info("Stündlicher Scan: neue Planeten gefunden: %s", ", ".join(names))
+                    await self._notify(
+                        "🌍 <b>Neuer Planet entdeckt (stündlicher Scan)</b>\n" +
+                        "\n".join(f"• {n}" for n in names)
+                    )
+                else:
+                    logger.debug("Stündlicher Planeten-Scan: keine neuen Planeten.")
+
+            await asyncio.sleep(self._PLANET_SCAN_INTERVAL_S)
 
     async def _telegram_listener(self) -> None:
         """Long-polling für Telegram-Befehle (/stop, /start).
