@@ -666,6 +666,47 @@ class BotLoop:
 
         return False
 
+    def _update_next_switch_info(self) -> None:
+        """Berechnet den nächsten wahrscheinlichen Planet-Wechsel und schreibt ihn in task_state."""
+        if len(self._planet_cities) <= 1:
+            ts.set_next_planet_switch(None, "")
+            return
+
+        now = time.time()
+        current_id = self._planet_cities[self._current_city_idx].get("id", 0)
+        earliest_switch = self._last_planet_switch + self._PLANET_MIN_INTERVAL_S
+
+        # Kandidaten in Prioritätsreihenfolge (gleiche Logik wie _maybe_switch_planet)
+        target: dict | None = None
+
+        for city in self._planet_cities:
+            if city.get("id") == current_id:
+                continue
+            build_free_at = city.get("_build_free_at", 0)
+            last_visited  = city.get("_last_visited", 0)
+            if build_free_at == 0 and last_visited > 0 and (now - last_visited) >= self._PLANET_IDLE_VISIT_S:
+                target = city; break
+            if build_free_at > 0 and build_free_at <= now and last_visited < build_free_at:
+                target = city; break
+
+        if target is None:
+            oldest_visited = now
+            for city in self._planet_cities:
+                if city.get("id") == current_id:
+                    continue
+                lv = city.get("_last_visited", 0)
+                if lv < oldest_visited:
+                    oldest_visited = lv
+                    target = city
+
+        name = ""
+        if target:
+            n = target.get("name", "")
+            c = target.get("coords", "")
+            name = f"{n} ({c})" if n and c else (n or f"ID {target.get('id','?')}")
+
+        ts.set_next_planet_switch(earliest_switch, name)
+
     async def _do_switch_planet(self, city_id: int, reason: str = "") -> bool:
         """Führt den eigentlichen Planetenwechsel durch und aktualisiert Tracking-Daten."""
         from_city = self._planet_cities[self._current_city_idx] if self._planet_cities else {}
@@ -1205,6 +1246,7 @@ class BotLoop:
 
             self._stats.turns_completed += 1
             self._consecutive_failures = 0
+            self._update_next_switch_info()
 
         except Exception as e:
             self._consecutive_failures += 1

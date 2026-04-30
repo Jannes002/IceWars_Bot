@@ -88,6 +88,10 @@ class BotTaskState:
     # Planet-Wechsel-Anfrage vom Dashboard: city_id oder None
     switch_planet_request: Optional[int] = None
 
+    # Nächster geplanter Planet-Wechsel (für Dashboard-Anzeige)
+    next_planet_switch_at: Optional[float] = None   # Unix-Timestamp frühestmöglicher Wechsel
+    next_planet_target: str = ""                    # Name des Ziel-Planeten
+
     def to_dict(self) -> dict:
         return {
             "bot_status": self.bot_status,
@@ -124,6 +128,8 @@ class BotTaskState:
             "last_execute_result": self.last_execute_result,
             "donate_recommended": list(self.donate_recommended),
             "current_city_id": self.current_city_id,
+            "next_planet_switch_at": self.next_planet_switch_at,
+            "next_planet_target": self.next_planet_target,
         }
 
 
@@ -347,6 +353,13 @@ def set_current_city_id(city_id: int) -> None:
 def get_current_city_id() -> int:
     with _lock:
         return _state.current_city_id
+
+
+def set_next_planet_switch(switch_at: Optional[float], target_name: str) -> None:
+    """Setzt Infos über den nächsten geplanten Planet-Wechsel (für Dashboard)."""
+    with _lock:
+        _state.next_planet_switch_at = switch_at
+        _state.next_planet_target = target_name
 
 
 def request_switch_planet(city_id: int) -> None:

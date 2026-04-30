@@ -571,6 +571,11 @@
         <div class="metric-value" id="m-turns">—</div>
         <div class="metric-sub" id="m-uptime">—</div>
       </div>
+      <div class="metric-card" id="m-planet-switch-card" style="display:none">
+        <div class="metric-label">Nächster Wechsel</div>
+        <div class="metric-value" id="m-planet-switch-time" style="font-size:1rem">—</div>
+        <div class="metric-sub" id="m-planet-switch-target" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</div>
+      </div>
     </div>
 
     <!-- Bot Status + Queue + Recommended Action -->
@@ -1003,6 +1008,28 @@ function updateStatusPill(tasks) {
   if (tasks.turn_number) turn.textContent = 'Runde ' + tasks.turn_number;
   const mt = document.getElementById('m-turns');
   if (mt) mt.textContent = tasks.turn_number || '—';
+  updatePlanetSwitchCard(tasks);
+}
+
+function updatePlanetSwitchCard(tasks) {
+  const card = document.getElementById('m-planet-switch-card');
+  const switchAt = tasks.next_planet_switch_at;
+  const target = tasks.next_planet_target;
+  if (!switchAt && !target) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  const now = Date.now() / 1000;
+  const diff = switchAt ? Math.round(switchAt - now) : 0;
+  const timeEl = document.getElementById('m-planet-switch-time');
+  if (diff <= 0) {
+    timeEl.textContent = 'Bereit';
+    timeEl.style.color = 'var(--green)';
+  } else {
+    timeEl.style.color = 'var(--text)';
+    if (diff < 60)        timeEl.textContent = diff + 's';
+    else if (diff < 3600) timeEl.textContent = Math.round(diff / 60) + ' min';
+    else                  timeEl.textContent = (diff / 3600).toFixed(1) + 'h';
+  }
+  setText('m-planet-switch-target', target || '—');
 }
 
 function updateMetrics(tasks, latest) {
