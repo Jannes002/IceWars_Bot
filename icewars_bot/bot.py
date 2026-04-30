@@ -23,6 +23,7 @@ from .telegram import TelegramNotifier, make_notifier
 from . import task_state as ts
 from . import cooldown
 from . import goals as G
+from . import planets_store
 
 logger = logging.getLogger(__name__)
 
@@ -138,11 +139,14 @@ class BotLoop:
         self._last_auto_build_time: float = 0.0        # Zeitpunkt des letzten Auto-Builds
 
         # Multi-Planet-Rotation
-        # _planet_cities: [{id, name, coords, ...}] – wird aus colonies-API befüllt
-        # Enthält immer auch die AKTUELLE Stadt (an Stelle _current_city_idx).
-        self._planet_cities: list[dict] = []
+        known, excluded = planets_store.load()
+        self._planet_cities: list[dict] = known
+        self._excluded_planet_ids: set[int] = excluded
         self._current_city_idx: int = 0
         self._last_planet_switch: float = 0.0   # Unix-Timestamp des letzten Wechsels
+        if known:
+            logger.info("Planeten aus Speicher geladen: %d bekannt, %d ausgeschlossen",
+                        len(known), len(excluded))
 
     async def run(self) -> None:
         logger.info("Bot startet...")
@@ -551,13 +555,16 @@ class BotLoop:
 
         Neu erkannte Planeten werden gemeldet.
         """
+        # Ausgeschlossene Planeten aus den colonies-Daten herausfiltern
+        colonies = [c for c in colonies
+                    if isinstance(c, dict) and c.get("id")
+                    and c.get("id") not in self._excluded_planet_ids]
+
         known_ids = {c.get("id") for c in self._planet_cities}
         new_planet_ids = {c.get("id") for c in colonies} - known_ids - {current_city_id}
 
         # Vollständige Liste: aktuelle Stadt + alle Kolonien
         all_cities: list[dict] = []
-        # Aktuelle Stadt als minimalen Eintrag hinzufügen (wird beim nächsten
-        # Scrape durch echte Daten ersetzt)
         current_entry: dict | None = next(
             (c for c in self._planet_cities if c.get("id") == current_city_id),
             None,
@@ -567,8 +574,7 @@ class BotLoop:
         all_cities.append(current_entry)
 
         for col in colonies:
-            if isinstance(col, dict) and col.get("id"):
-                all_cities.append(col)
+            all_cities.append(col)
 
         # Index der aktuellen Stadt in der neuen Liste ermitteln
         old_current_id = (
@@ -592,6 +598,8 @@ class BotLoop:
                 "🌍 <b>Neue Kolonie entdeckt!</b>\n" +
                 "\n".join(f"• {n}" for n in names)
             ))
+
+        planets_store.save(self._planet_cities)
 
     async def _maybe_switch_planet(self) -> bool:
         """Prüft ob ein Planetenwechsel sinnvoll ist und führt ihn aus.
@@ -725,6 +733,7 @@ class BotLoop:
                     self._current_city_idx = i
                     break
             self._last_planet_switch = time.time()
+            planets_store.save(self._planet_cities)
             logger.info("Planet-Wechsel erfolgreich → %s", to_label)
             record_activity(
                 "planet_switch",
@@ -1088,8 +1097,20 @@ class BotLoop:
             "/hilfe — Diese Hilfe anzeigen"
         )
 
+    def _process_planet_removals(self) -> None:
+        """Verarbeitet Planet-Entfernungsanfragen vom Dashboard."""
+        for city_id in ts.consume_planet_remove_requests():
+            self._planet_cities = [c for c in self._planet_cities if c.get("id") != city_id]
+            self._excluded_planet_ids.add(city_id)
+            planets_store.remove(city_id)
+            ts.remove_colony_snapshot(city_id)
+            # Index neu setzen falls nötig
+            self._current_city_idx = min(self._current_city_idx, max(0, len(self._planet_cities) - 1))
+            logger.info("Planet %d aus Rotation entfernt.", city_id)
+
     async def _run_turn(self) -> None:
         try:
+            self._process_planet_removals()
             # Planet-Rotation: Dashboard-Anfragen + smart buildqueue-aware Switching
             switched = await self._maybe_switch_planet()
             if switched:

@@ -88,6 +88,9 @@ class BotTaskState:
     # Planet-Wechsel-Anfrage vom Dashboard: city_id oder None
     switch_planet_request: Optional[int] = None
 
+    # Planet-Entfernungsanfragen vom Dashboard: Liste von city_ids
+    planet_remove_requests: list = field(default_factory=list)
+
     # Nächster geplanter Planet-Wechsel (für Dashboard-Anzeige)
     next_planet_switch_at: Optional[float] = None   # Unix-Timestamp frühestmöglicher Wechsel
     next_planet_target: str = ""                    # Name des Ziel-Planeten
@@ -353,6 +356,26 @@ def set_current_city_id(city_id: int) -> None:
 def get_current_city_id() -> int:
     with _lock:
         return _state.current_city_id
+
+
+def request_remove_planet(city_id: int) -> None:
+    """Vom Dashboard: markiert einen Planeten zum Entfernen."""
+    with _lock:
+        if city_id not in _state.planet_remove_requests:
+            _state.planet_remove_requests.append(city_id)
+
+
+def consume_planet_remove_requests() -> list[int]:
+    """Vom Bot-Loop: gibt alle ausstehenden Entfernungsanfragen zurück und löscht sie."""
+    with _lock:
+        reqs = list(_state.planet_remove_requests)
+        _state.planet_remove_requests.clear()
+        return reqs
+
+
+def remove_colony_snapshot(city_id: int) -> None:
+    with _lock:
+        _state.colonies_snapshots.pop(city_id, None)
 
 
 def set_next_planet_switch(switch_at: Optional[float], target_name: str) -> None:

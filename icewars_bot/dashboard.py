@@ -27,6 +27,7 @@ from . import task_state as ts
 from . import goals as G
 from . import strategy as _strategy
 from . import credentials as creds
+from . import planets_store
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 else:
                     ts.request_switch_planet(city_id)
                     logger.info("Planet-Wechsel angefordert via Dashboard: city_id=%d", city_id)
+                    self._json_response({"queued": True, "city_id": city_id})
+            elif parsed.path == "/api/remove-planet":
+                city_id = int(data.get("city_id", 0))
+                if not city_id:
+                    self._json_response({"error": "city_id erforderlich"}, 400)
+                else:
+                    ts.request_remove_planet(city_id)
+                    logger.info("Planet-Entfernung angefordert via Dashboard: city_id=%d", city_id)
                     self._json_response({"queued": True, "city_id": city_id})
             elif parsed.path == "/api/pause":
                 ts.set_paused(True)

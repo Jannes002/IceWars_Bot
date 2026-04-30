@@ -437,10 +437,18 @@
     }
     .planet-card.active-planet { border-color: var(--accent); }
     .planet-header {
-      padding: 12px 14px;
+      padding: 10px 14px;
       border-bottom: 1px solid var(--border);
       display: flex; align-items: center; gap: 10px;
     }
+    .btn-remove-planet {
+      width: 24px; height: 24px; border-radius: 50%;
+      border: 1px solid var(--border); background: none;
+      color: var(--text-dim); font-size: 0.7rem; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      transition: all .15s;
+    }
+    .btn-remove-planet:hover { border-color: var(--red); color: var(--red); background: var(--red-dim); }
     .planet-name { font-size: 0.9rem; font-weight: 700; flex: 1; }
     .planet-coords { font-size: 0.72rem; color: var(--text-muted); }
     .planet-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
@@ -1342,7 +1350,10 @@ function planetCard(c, activeId) {
         <div class="planet-name">${esc(c.city_name || 'Planet ' + c.city_id)}</div>
         <div class="planet-coords">${esc(c.coords || '')} ${c.planet_type ? '· ' + esc(c.planet_type) : ''}</div>
       </div>
-      ${isActive ? '<span class="queue-badge build">Aktiv</span>' : `<button class="btn btn-sm btn-ghost" onclick="switchPlanet(${c.city_id})">Wechseln</button>`}
+      <div style="display:flex;gap:6px;align-items:center">
+        ${isActive ? '<span class="queue-badge build">Aktiv</span>' : `<button class="btn btn-sm btn-ghost" onclick="switchPlanet(${c.city_id})">Wechseln</button>`}
+        ${!isActive ? `<button class="btn-remove-planet" title="Planet entfernen" onclick="removePlanet(${c.city_id}, event)">✕</button>` : ''}
+      </div>
     </div>
     <div class="planet-body">
       <div class="mini-res-row">
@@ -1373,6 +1384,16 @@ async function switchPlanet(cityId) {
     await api('/api/switch-planet', 'POST', { city_id: cityId });
     toast('Planet-Wechsel angefordert');
   } catch(e) { toast('Fehler beim Planet-Wechsel', 'error'); }
+}
+
+async function removePlanet(cityId, event) {
+  event.stopPropagation();
+  if (!confirm('Planet aus der Rotation entfernen? Er wird dauerhaft ausgeschlossen bis du ihn manuell wieder hinzufügst.')) return;
+  try {
+    await api('/api/remove-planet', 'POST', { city_id: cityId });
+    toast('Planet entfernt');
+    await loadPlanets();
+  } catch(e) { toast('Fehler beim Entfernen', 'error'); }
 }
 
 /* ── Settings ──────────────────────────────────────────────────────── */
