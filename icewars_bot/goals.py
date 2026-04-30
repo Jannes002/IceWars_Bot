@@ -49,6 +49,9 @@ DEFAULTS: dict[str, Any] = {
     # Auto-Forschung: wenn False startet der Bot keine neuen Forschungen.
     "auto_research_enabled": True,
 
+    # Auto-Lager: wenn False baut der Bot keine Lagergebäude mehr.
+    "auto_storage_enabled": True,
+
     # Mindest-Ressourcenmengen (Display-Ziele im Dashboard, keine Bot-Logik)
     "resource_targets": {
         "iron":      0.0,
@@ -168,6 +171,11 @@ def paused_resources() -> list[str]:
 def is_auto_research_enabled() -> bool:
     """True wenn der Bot automatisch Forschungen starten darf (Standard: True)."""
     return bool(get().get("auto_research_enabled", DEFAULTS["auto_research_enabled"]))
+
+
+def is_auto_storage_enabled() -> bool:
+    """True wenn der Bot automatisch Lager bauen darf (Standard: True)."""
+    return bool(get().get("auto_storage_enabled", DEFAULTS["auto_storage_enabled"]))
 
 
 def is_resource_paused(resource: str) -> bool:

@@ -950,6 +950,9 @@ class Strategy:
         Wählt das effizienteste Lager (max. Kapazität/Sekunde) aus der
         Kategorie ``storage`` anhand der Live-API-Daten.
         """
+        if not G.is_auto_storage_enabled():
+            logger.debug("Auto-Lager deaktiviert — überspringe.")
+            return None
         # 1) Übervolle Ressourcen identifizieren (sortiert nach Füllstand).
         #    Pausierte Ressourcen werden hier bereits aussortiert — so löst
         #    z.B. ice=0.95 KEIN Lager mehr aus, wenn 'ice' pausiert ist.
