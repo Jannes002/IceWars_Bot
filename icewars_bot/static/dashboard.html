@@ -463,6 +463,31 @@
     .mini-res-bar.danger { background: var(--red); }
     .mini-res-val { width: 50px; text-align: right; color: var(--text-muted); }
 
+    /* ── Planet Switcher ─────────────────────────────────────────────── */
+    .planet-switcher {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 16px; overflow-x: auto; flex-wrap: nowrap;
+      border-bottom: 1px solid var(--border);
+      scrollbar-width: none;
+    }
+    .planet-switcher::-webkit-scrollbar { display: none; }
+    .planet-chip {
+      display: flex; align-items: center; gap: 5px;
+      padding: 5px 12px; border-radius: 20px; white-space: nowrap;
+      border: 1px solid var(--border); background: none;
+      color: var(--text-muted); font-size: 0.78rem; font-weight: 500;
+      transition: all .15s; cursor: pointer; flex-shrink: 0;
+    }
+    .planet-chip:hover { border-color: var(--border-light); color: var(--text); }
+    .planet-chip.active {
+      border-color: var(--accent); color: var(--accent);
+      background: var(--accent-dim);
+    }
+    .planet-chip .chip-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--green); flex-shrink: 0;
+    }
+
     /* ── Charts ──────────────────────────────────────────────────────── */
     .chart-wrap {
       position: relative; height: 200px;
@@ -557,6 +582,11 @@
        TAB: ÜBERSICHT
   ══════════════════════════════════════════════════════════ -->
   <section id="tab-overview" class="tab-pane active">
+
+    <!-- Planet Switcher -->
+    <div class="card section-gap" id="planet-switcher-card" style="display:none">
+      <div class="planet-switcher" id="planet-switcher"></div>
+    </div>
 
     <!-- Quick Metrics -->
     <div class="grid-4 section-gap" id="metrics-row">
@@ -909,6 +939,7 @@ const LOG_FILTER_CATS = {
 };
 
 /* ── State ─────────────────────────────────────────────────────────── */
+let _selectedPlanetId = null;  // null = aktueller aktiver Planet
 let _paused = false;
 let _logFilter = 'all';
 let _logOffset = 0;
@@ -988,15 +1019,71 @@ async function api(path, method = 'GET', body = null) {
   return r.json();
 }
 
+/* ── Planet Switcher ───────────────────────────────────────────────── */
+async function loadPlanetSwitcher() {
+  try {
+    const [planetsDb, colonies] = await Promise.all([
+      api('/api/snapshot-planets'),
+      api('/api/colonies'),
+    ]);
+    if (!planetsDb.length) return;
+
+    const nameMap = {};
+    for (const c of (colonies.colonies || [])) {
+      nameMap[c.city_id] = c.city_name || `Planet ${c.city_id}`;
+    }
+    const activeCityId = colonies.current_city_id;
+
+    const card = document.getElementById('planet-switcher-card');
+    const bar  = document.getElementById('planet-switcher');
+    card.style.display = '';
+
+    bar.innerHTML = planetsDb.map(p => {
+      const name   = p.name || nameMap[p.city_id] || `ID ${p.city_id}`;
+      const coords = p.coords || '';
+      const isActive = p.city_id === activeCityId;
+      const isSelected = _selectedPlanetId === p.city_id ||
+                         (_selectedPlanetId === null && isActive);
+      return `<button class="planet-chip ${isSelected ? 'active' : ''}"
+                      onclick="selectPlanet(${p.city_id})"
+                      data-city="${p.city_id}">
+        ${isActive ? '<span class="chip-dot"></span>' : ''}
+        ${esc(name)}${coords ? ` <span style="opacity:.6;font-size:.7em">${esc(coords)}</span>` : ''}
+      </button>`;
+    }).join('');
+  } catch(e) {}
+}
+
+function selectPlanet(cityId) {
+  _selectedPlanetId = cityId;
+  document.querySelectorAll('.planet-chip').forEach(c => {
+    c.classList.toggle('active', parseInt(c.dataset.city) === cityId);
+  });
+  refreshOverviewData();
+}
+
 /* ── Overview: Status polling ──────────────────────────────────────── */
+async function refreshOverviewData() {
+  try {
+    const cityParam = _selectedPlanetId ? `?city_id=${_selectedPlanetId}` : '';
+    const [tasks, latest] = await Promise.all([
+      api('/api/tasks'),
+      api(`/api/latest${cityParam}`),
+    ]);
+    updateMetrics(tasks, latest);
+    updateResources(latest);
+    if (!_selectedPlanetId) {
+      updateQueue(tasks);
+      updateRecommended(tasks);
+    }
+  } catch(e) {}
+}
+
 async function refreshStatus() {
   try {
-    const [tasks, latest] = await Promise.all([api('/api/tasks'), api('/api/latest')]);
+    const tasks = await api('/api/tasks');
     updateStatusPill(tasks);
-    updateMetrics(tasks, latest);
-    updateQueue(tasks);
-    updateRecommended(tasks);
-    updateResources(latest);
+    await refreshOverviewData();
   } catch(e) { /* ignore transient errors */ }
 }
 
@@ -1209,8 +1296,9 @@ function setChartRange(hours, label, btn) {
 async function loadCharts() {
   const now = Date.now() / 1000;
   const from = now - _chartRangeH * 3600;
+  const cityParam = _selectedPlanetId ? `&city_id=${_selectedPlanetId}` : '';
   try {
-    const data = await api(`/api/snapshots?from=${from}&limit=2000`);
+    const data = await api(`/api/snapshots?from=${from}&limit=2000${cityParam}`);
     renderResourceChart(data);
     renderPointsChart(data);
   } catch(e) {}
@@ -1530,16 +1618,27 @@ async function saveCredentials() {
 /* ── Central tick ──────────────────────────────────────────────────── */
 let _tickCount = 0;
 
+/* ── Init ──────────────────────────────────────────────────────────── */
+async function init() {
+  await refreshStatus();
+  await loadPlanetSwitcher();
+  refreshRank();
+  loadCharts();
+
+  setInterval(tick, 15000);
+}
+
 async function tick() {
   _tickCount++;
   const tab = activeTab();
 
-  // Header status + planet-switch countdown — immer
   await refreshStatus();
 
-  // Tab-spezifische Aktualisierungen
   if (tab === 'overview') {
-    if (_tickCount % 4 === 0) loadCharts();   // alle 60s
+    if (_tickCount % 4 === 0) {
+      await loadPlanetSwitcher();
+      loadCharts();
+    }
   } else if (tab === 'planets') {
     await loadPlanets();
   } else if (tab === 'log') {
@@ -1549,17 +1648,7 @@ async function tick() {
     }
   }
 
-  // Rang alle 2 Minuten (unabhängig vom Tab)
   if (_tickCount % 8 === 0) refreshRank();
-}
-
-/* ── Init ──────────────────────────────────────────────────────────── */
-async function init() {
-  await refreshStatus();
-  refreshRank();
-  loadCharts();
-
-  setInterval(tick, 15000);
 }
 
 init();

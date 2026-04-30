@@ -91,11 +91,16 @@ def init_db(path: Path = DB_PATH) -> None:
 
                 -- Build-Queue Info
                 build_slots_used  INTEGER DEFAULT 0,
-                build_slots_max   INTEGER DEFAULT 0
+                build_slots_max   INTEGER DEFAULT 0,
+
+                -- Planet
+                city_id           INTEGER DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_snapshots_epoch
                 ON snapshots(epoch);
+            CREATE INDEX IF NOT EXISTS idx_snapshots_city
+                ON snapshots(city_id, epoch);
 
             CREATE TABLE IF NOT EXISTS highscores (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -155,6 +160,12 @@ def init_db(path: Path = DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS idx_activity_log_category
                 ON activity_log(category);
         """)
+    # Migration: city_id Spalte zu snapshots hinzufügen falls nicht vorhanden
+    with _connect(path) as conn:
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
+        if "city_id" not in existing:
+            conn.execute("ALTER TABLE snapshots ADD COLUMN city_id INTEGER DEFAULT 0")
+            logger.info("Migration: snapshots.city_id hinzugefügt.")
     logger.info("Datenbank initialisiert: %s", path.resolve())
 
 
@@ -174,7 +185,8 @@ def record_snapshot(state: GameState, path: Path = DB_PATH) -> None:
                 energy_cap, vv4a_cap,
                 population_free, population_total, population_max,
                 satisfaction, living_conditions, eco_points, points,
-                build_slots_used, build_slots_max
+                build_slots_used, build_slots_max,
+                city_id
             ) VALUES (
                 ?, ?,
                 ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -182,7 +194,8 @@ def record_snapshot(state: GameState, path: Path = DB_PATH) -> None:
                 ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?,
                 ?, ?, ?, ?,
-                ?, ?
+                ?, ?,
+                ?
             )
         """, (
             now.isoformat(), epoch,
@@ -198,6 +211,7 @@ def record_snapshot(state: GameState, path: Path = DB_PATH) -> None:
             state.population_free, state.population_total, state.population_max,
             state.satisfaction, state.living_conditions, state.eco_points, state.points,
             len(state.build_queue), state.max_build_slots,
+            state.city_id,
         ))
 
     logger.debug("Snapshot gespeichert (epoch=%.0f)", epoch)
@@ -251,6 +265,7 @@ def get_snapshots(
     to_epoch: Optional[float] = None,
     limit: int = 10000,
     path: Path = DB_PATH,
+    city_id: Optional[int] = None,
 ) -> list[dict]:
     """Gibt Snapshots als Liste von Dicts zurück."""
     conditions = []
@@ -262,6 +277,9 @@ def get_snapshots(
     if to_epoch is not None:
         conditions.append("epoch <= ?")
         params.append(to_epoch)
+    if city_id is not None:
+        conditions.append("city_id = ?")
+        params.append(city_id)
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -271,6 +289,18 @@ def get_snapshots(
             params + [limit],
         ).fetchall()
 
+    return [dict(row) for row in rows]
+
+
+def get_snapshot_planets(path: Path = DB_PATH) -> list[dict]:
+    """Gibt alle city_ids zurück für die Snapshots existieren, mit Zählern."""
+    with _connect(path) as conn:
+        rows = conn.execute(
+            """SELECT city_id, COUNT(*) as snapshot_count, MAX(epoch) as latest_epoch
+               FROM snapshots
+               GROUP BY city_id
+               ORDER BY latest_epoch DESC"""
+        ).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -301,12 +331,18 @@ def get_sessions(
     return [dict(row) for row in rows]
 
 
-def get_latest_snapshot(path: Path = DB_PATH) -> Optional[dict]:
-    """Gibt den neuesten Snapshot zurück."""
+def get_latest_snapshot(path: Path = DB_PATH, city_id: Optional[int] = None) -> Optional[dict]:
+    """Gibt den neuesten Snapshot zurück, optional gefiltert nach city_id."""
     with _connect(path) as conn:
-        row = conn.execute(
-            "SELECT * FROM snapshots ORDER BY epoch DESC LIMIT 1"
-        ).fetchone()
+        if city_id is not None:
+            row = conn.execute(
+                "SELECT * FROM snapshots WHERE city_id = ? ORDER BY epoch DESC LIMIT 1",
+                (city_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM snapshots ORDER BY epoch DESC LIMIT 1"
+            ).fetchone()
     return dict(row) if row else None
 
 

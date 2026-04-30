@@ -21,6 +21,7 @@ from .db import (
     get_snapshots, get_sessions, get_latest_snapshot, get_snapshot_count,
     get_highscores, get_highscore_timeline, get_latest_highscore,
     get_build_events, get_activity_log, record_activity,
+    get_snapshot_planets,
     DB_PATH,
 )
 from . import task_state as ts
@@ -159,6 +160,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._api_build_events(qs)
             elif path == "/api/activity-log":
                 self._api_activity_log(qs)
+            elif path == "/api/snapshot-planets":
+                self._api_snapshot_planets()
             elif path == "/api/tasks":
                 self._json_response(ts.get())
             elif path == "/api/scoring":
@@ -196,7 +199,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         from_epoch = float(qs["from"][0]) if "from" in qs else None
         to_epoch = float(qs["to"][0]) if "to" in qs else None
         limit = int(qs.get("limit", [10000])[0])
-        data = get_snapshots(from_epoch, to_epoch, limit, self.db_path)
+        city_id = int(qs["city_id"][0]) if "city_id" in qs else None
+        data = get_snapshots(from_epoch, to_epoch, limit, self.db_path, city_id=city_id)
         self._json_response(data)
 
     def _api_sessions(self, qs: dict) -> None:
@@ -206,8 +210,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._json_response(data)
 
     def _api_latest(self) -> None:
-        data = get_latest_snapshot(self.db_path)
+        qs = parse_qs(urlparse(self.path).query)
+        city_id = int(qs["city_id"][0]) if "city_id" in qs else None
+        data = get_latest_snapshot(self.db_path, city_id=city_id)
         self._json_response(data or {})
+
+    def _api_snapshot_planets(self) -> None:
+        planets_db = get_snapshot_planets(self.db_path)
+        colonies = ts.get_colonies_snapshots()
+        # Namen aus colonies_snapshots anreichern
+        for p in planets_db:
+            col = colonies.get(p["city_id"], {})
+            p["name"]   = col.get("city_name", "")
+            p["coords"] = col.get("coords", "")
+        self._json_response(planets_db)
 
     def _api_stats(self) -> None:
         count = get_snapshot_count(self.db_path)
