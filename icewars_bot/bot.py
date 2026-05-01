@@ -393,39 +393,37 @@ class BotLoop:
     async def _hourly_planet_scan(self) -> None:
         """Prüft stündlich ob neue Planeten/Kolonien im Spiel vorhanden sind.
 
-        Vergleich über Koordinaten — ein Planet ist eindeutig an seinen
-        Koordinaten erkennbar (z.B. '1:19:14').
+        Vergleich über city_id — alle Kolonien aus dem API-Response werden mit
+        den bekannten Planeten abgeglichen. Neu gefundene werden direkt zur
+        Planetenliste hinzugefügt, damit sie nicht nächste Stunde erneut gemeldet werden.
         """
-        # Erste Prüfung erst nach einer Stunde, nicht beim Start
         await asyncio.sleep(self._PLANET_SCAN_INTERVAL_S)
         while True:
             state = self._last_state
             if state is not None:
-                known_coords = {
-                    c.get("coords", "").strip()
-                    for c in self._planet_cities
-                    if c.get("coords")
-                }
-                new_planets: list[dict] = []
-                all_colonies = list(state.colonies or [])
-                # aktuelle Stadt auch prüfen
-                if state.coords and state.city_id:
-                    all_colonies.append({
-                        "id": state.city_id,
-                        "name": state.city_name or "",
-                        "coords": state.coords,
-                    })
+                known_ids = {c.get("id") for c in self._planet_cities if c.get("id")}
 
+                # Alle dem Spiel bekannten Kolonien sammeln
+                all_colonies: list[dict] = list(state.colonies or [])
+                if state.city_id:
+                    # aktuelle Stadt ergänzen falls noch nicht enthalten
+                    if state.city_id not in {c.get("id") for c in all_colonies}:
+                        all_colonies.append({
+                            "id": state.city_id,
+                            "name": state.city_name or "",
+                            "coords": state.coords or "",
+                        })
+
+                new_planets: list[dict] = []
                 for col in all_colonies:
-                    coords = (col.get("coords") or "").strip()
                     city_id = col.get("id")
-                    if not coords or not city_id:
+                    if not city_id:
                         continue
                     if city_id in self._excluded_planet_ids:
                         continue
-                    if coords not in known_coords:
+                    if city_id not in known_ids:
                         new_planets.append(col)
-                        known_coords.add(coords)
+                        known_ids.add(city_id)
 
                 count = len(self._planet_cities)
                 record_activity(
@@ -435,6 +433,11 @@ class BotLoop:
                 )
 
                 if new_planets:
+                    # Neu gefundene Planeten sofort zur Liste hinzufügen
+                    for col in new_planets:
+                        self._planet_cities.append(dict(col))
+                    planets_store.save(self._planet_cities)
+
                     names = [
                         f"{c.get('name', 'Unbekannt')} ({c.get('coords', '?')})"
                         for c in new_planets
@@ -1197,8 +1200,15 @@ class BotLoop:
             build_free_at = (time.time() + max_remaining) if max_remaining > 0 else 0
             for city in self._planet_cities:
                 if city.get("id") == state.city_id:
-                    city["_build_free_at"] = build_free_at
-                    city["_last_visited"]  = time.time()
+                    city["_build_free_at"]  = build_free_at
+                    city["_last_visited"]   = time.time()
+                    # Koordinaten/Name/Typ aus dem echten Scrape aktualisieren
+                    if state.coords:
+                        city["coords"] = state.coords
+                    if state.city_name:
+                        city["name"] = state.city_name
+                    if state.planet_type:
+                        city["planet_type"] = state.planet_type
                     break
 
             # Initialzustand beim ersten Scrape merken
