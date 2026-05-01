@@ -1287,8 +1287,10 @@ class BotLoop:
                 if success:
                     self._stats.actions_executed += 1
                     self._record_action_event(research)
+                    colony = self._colony_label(state)
                     record_activity(
-                        "bot_action", task.label, task.reason or "Auto-Research",
+                        "bot_action", task.label,
+                        f"{task.reason or 'Auto-Research'} · {colony}",
                         city_id=state.city_id,
                     )
                     logger.info("Auto-Research gestartet: %s", task.label)
@@ -1319,8 +1321,10 @@ class BotLoop:
                     self._last_auto_build_time = now
                     if btype:
                         cooldown.record_success(btype)
+                    colony = self._colony_label(state)
                     record_activity(
-                        "bot_action", task.label, task.reason or "Auto-Build",
+                        "bot_action", task.label,
+                        f"{task.reason or 'Auto-Build'} · {colony}",
                         city_id=state.city_id,
                     )
                     logger.info("Auto-Build ausgeführt: %s", task.label)

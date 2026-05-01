@@ -320,23 +320,73 @@ class GameScraper:
     async def switch_to_city(self, city_id: int) -> bool:
         """Wechselt im Spiel zur Kolonie mit der gegebenen ID.
 
-        Versucht zuerst bekannte JS-Funktionen, dann DOM-Selektoren.
-        Gibt True zurück wenn der Wechsel bestätigt wurde (API liefert neue city_id).
+        Reihenfolge:
+        1. Direkter API-POST (REST-Standard für Stadtauswahl)
+        2. JS-Funktionen (game-spezifische Kandidaten)
+        3. DOM-Klick auf Kolonieselektor-Elemente
+        4. URL-Navigation mit city_id-Parameter
+
+        Gibt True zurück wenn der Wechsel durch /api/city/ bestätigt wird.
         """
-        async def _confirm_switched() -> bool:
+        async def _confirm_switched(wait: float = 1.5) -> bool:
             """True wenn /api/city/ jetzt city_id zurückgibt."""
             try:
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(wait)
                 check = await self._api_get("/api/city/")
-                return int(check.get("id", -1)) == city_id
-            except Exception:
+                actual = int(check.get("id", -1))
+                if actual == city_id:
+                    return True
+                logger.debug("Koloniewechsel-Check: API liefert city_id=%d, erwartet %d", actual, city_id)
+                return False
+            except Exception as e:
+                logger.debug("Koloniewechsel-Check fehlgeschlagen: %s", e)
                 return False
 
+        # ── 1. Direkter API-POST ──────────────────────────────────────────
+        _SELECT_API_JS = """
+        async (city_id) => {
+            const token = localStorage.getItem('icewars_token');
+            const endpoints = [
+                '/api/city/select/',
+                '/api/city/switch/',
+                '/api/select_city/',
+                '/api/switch_city/',
+            ];
+            for (const ep of endpoints) {
+                try {
+                    const resp = await fetch(ep, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': 'Bearer ' + token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({city_id: city_id})
+                    });
+                    if (resp.ok) return {ok: true, endpoint: ep};
+                } catch(e) {}
+            }
+            return {ok: false};
+        }
+        """
+        try:
+            result = await self._page.evaluate(_SELECT_API_JS, city_id)
+            if result.get("ok"):
+                if await _confirm_switched():
+                    logger.info("Koloniewechsel zu %d via API-POST: %s", city_id, result.get("endpoint"))
+                    return True
+        except Exception as e:
+            logger.debug("API-POST-Versuch fehlgeschlagen: %s", e)
+
+        # ── 2. JS-Funktionen ─────────────────────────────────────────────
         js_candidates = [
             f"selectCity({city_id})",
             f"switchCity({city_id})",
+            f"loadCity({city_id})",
+            f"showCity({city_id})",
+            f"openCity({city_id})",
             f"goToCity({city_id})",
             f"City.select({city_id})",
+            f"City.load({city_id})",
             f"Game.switchCity({city_id})",
             f"app.selectCity({city_id})",
             f"window.selectCity({city_id})",
@@ -350,13 +400,15 @@ class GameScraper:
             except Exception:
                 continue
 
-        # DOM-Fallback: Kolonie-Elemente suchen und klicken
+        # ── 3. DOM-Klick ─────────────────────────────────────────────────
         dom_selectors = [
             f"[data-city-id='{city_id}']",
             f"[data-id='{city_id}']",
+            f"[data-colony-id='{city_id}']",
             f".colony-item[data-id='{city_id}']",
             f"#city-{city_id}",
             f"a[href*='city={city_id}']",
+            f"a[href*='city_id={city_id}']",
             f"a[href*='id={city_id}']",
         ]
         for sel in dom_selectors:
@@ -364,13 +416,27 @@ class GameScraper:
                 el = await self._page.query_selector(sel)
                 if el:
                     await el.click()
-                    if await _confirm_switched():
+                    if await _confirm_switched(wait=2.5):
                         logger.info("Koloniewechsel zu %d via DOM: %s", city_id, sel)
                         return True
             except Exception:
                 continue
 
-        logger.warning("Koloniewechsel zu %d fehlgeschlagen — kein passender JS/DOM-Einstieg.", city_id)
+        # ── 4. URL-Navigation ────────────────────────────────────────────
+        try:
+            base_url = self._page.url.split("?")[0].rstrip("/")
+            for param in [f"?city_id={city_id}", f"?city={city_id}", f"?id={city_id}"]:
+                await self._page.goto(base_url + param, wait_until="domcontentloaded")
+                if await _confirm_switched(wait=2.0):
+                    logger.info("Koloniewechsel zu %d via URL-Navigation: %s", city_id, param)
+                    return True
+        except Exception as e:
+            logger.debug("URL-Navigation fehlgeschlagen: %s", e)
+
+        logger.warning(
+            "Koloniewechsel zu %d fehlgeschlagen — alle Methoden (API-POST, JS, DOM, URL) erfolglos.",
+            city_id,
+        )
         return False
 
     async def scrape(self) -> dict[str, Any]:
