@@ -392,8 +392,8 @@ class GameScraper:
     async def switch_to_city(self, city_id: int) -> bool:
         """Wechselt im Spiel zur Kolonie mit der gegebenen ID.
 
-        Strategie: erst DOM nach echten onclick-Handlern durchsuchen,
-        dann bekannte JS-Funktionen und DOM-Selektoren probieren.
+        Nutzt die echten Spielfunktionen: changePlanet(), loadCityData(),
+        setPlanetSelectValue() — ermittelt via dump_colony_diagnostics().
         Gibt True zurück wenn /api/city/ die neue city_id bestätigt.
         """
         async def _confirm_switched(wait: float = 2.0) -> bool:
@@ -409,123 +409,70 @@ class GameScraper:
                 logger.debug("Koloniewechsel-Check fehlgeschlagen: %s", e)
                 return False
 
-        # ── 1. DOM: onclick-Handler mit city_id direkt auslesen ──────────
-        # Suche nach Elementen die exakt diese city_id im onclick referenzieren
-        _FIND_COLONY_EL_JS = """
-        (city_id) => {
-            // onclick-Attribute durchsuchen
-            const all = document.querySelectorAll('[onclick]');
-            for (const el of all) {
-                const oc = el.getAttribute('onclick') || '';
-                if (oc.includes(String(city_id))) {
-                    return {found: true, method: 'onclick', onclick: oc,
-                            tag: el.tagName, id: el.id, cls: el.className};
-                }
-            }
-            // href mit city_id
-            const links = document.querySelectorAll('a[href]');
-            for (const el of links) {
-                const h = el.getAttribute('href') || '';
-                if (h.includes(String(city_id))) {
-                    return {found: true, method: 'href', href: h,
-                            tag: el.tagName, id: el.id, cls: el.className};
-                }
-            }
-            return {found: false};
-        }
-        """
+        # ── 1. changePlanet(city_id) — primäre Spielfunktion ─────────────
         try:
-            info = await self._page.evaluate(_FIND_COLONY_EL_JS, city_id)
-            if info.get("found"):
-                method = info.get("method")
-                if method == "onclick":
-                    # onclick direkt ausführen
-                    onclick_code = info["onclick"]
-                    logger.debug("Führe onclick aus: %s", onclick_code)
-                    await self._page.evaluate(onclick_code)
-                    if await _confirm_switched():
-                        logger.info("Koloniewechsel zu %d via onclick: %s", city_id, onclick_code[:80])
-                        return True
-                elif method == "href":
-                    href = info["href"]
-                    base = self._page.url.split("?")[0].rstrip("/")
-                    target = href if href.startswith("http") else base + href
-                    await self._page.goto(target, wait_until="domcontentloaded")
-                    if await _confirm_switched():
-                        logger.info("Koloniewechsel zu %d via href: %s", city_id, href)
-                        return True
+            await self._page.evaluate(f"changePlanet({city_id})")
+            if await _confirm_switched():
+                logger.info("Koloniewechsel zu %d via changePlanet()", city_id)
+                return True
         except Exception as e:
-            logger.debug("DOM-onclick-Suche fehlgeschlagen: %s", e)
+            logger.debug("changePlanet() fehlgeschlagen: %s", e)
 
-        # ── 2. Klick auf DOM-Selektoren ───────────────────────────────────
-        dom_selectors = [
-            f"[data-city-id='{city_id}']",
-            f"[data-id='{city_id}']",
-            f"[data-colony-id='{city_id}']",
-            f"#city-{city_id}",
-            f".colony[data-id='{city_id}']",
-        ]
-        for sel in dom_selectors:
-            try:
-                el = await self._page.query_selector(sel)
-                if el:
-                    await el.click()
-                    if await _confirm_switched(wait=2.5):
-                        logger.info("Koloniewechsel zu %d via DOM-Klick: %s", city_id, sel)
-                        return True
-            except Exception:
-                continue
-
-        # ── 3. Bekannte JS-Funktionen probieren ───────────────────────────
-        js_candidates = [
-            f"selectCity({city_id})",
-            f"switchCity({city_id})",
-            f"loadCity({city_id})",
-            f"showCity({city_id})",
-            f"openCity({city_id})",
-            f"goToCity({city_id})",
-            f"City.select({city_id})",
-            f"City.load({city_id})",
-            f"Game.switchCity({city_id})",
-            f"app.selectCity({city_id})",
-        ]
-        for expr in js_candidates:
-            try:
-                await self._page.evaluate(expr)
-                if await _confirm_switched():
-                    logger.info("Koloniewechsel zu %d via JS: %s", city_id, expr)
-                    return True
-            except Exception:
-                continue
-
-        # ── 4. API-POST an bekannte Endpunkte ─────────────────────────────
-        _POST_JS = """
-        async (city_id) => {
-            const token = localStorage.getItem('icewars_token');
-            const eps = ['/api/city/select/', '/api/city/switch/',
-                         '/api/select_city/', '/api/city/' + city_id + '/select/'];
-            for (const ep of eps) {
-                try {
-                    const r = await fetch(ep, {
-                        method: 'POST',
-                        headers: {'Authorization': 'Bearer ' + token,
-                                  'Content-Type': 'application/json'},
-                        body: JSON.stringify({city_id})
-                    });
-                    if (r.ok) return {ok: true, ep};
-                } catch(e) {}
-            }
-            return {ok: false};
-        }
-        """
+        # ── 2. loadCityData(city_id) — alternative Ladefunktion ──────────
         try:
-            result = await self._page.evaluate(_POST_JS, city_id)
-            if result.get("ok"):
-                if await _confirm_switched():
-                    logger.info("Koloniewechsel zu %d via API-POST: %s", city_id, result.get("ep"))
-                    return True
+            await self._page.evaluate(f"loadCityData({city_id})")
+            if await _confirm_switched():
+                logger.info("Koloniewechsel zu %d via loadCityData()", city_id)
+                return True
         except Exception as e:
-            logger.debug("API-POST fehlgeschlagen: %s", e)
+            logger.debug("loadCityData() fehlgeschlagen: %s", e)
+
+        # ── 3. setPlanetSelectValue + Trigger ─────────────────────────────
+        # Das Dropdown auf den Wert setzen und ein change-Event feuern
+        try:
+            await self._page.evaluate(f"""
+                setPlanetSelectValue({city_id});
+                const sel = document.querySelector('select[onchange*="changePlanet"], #planet-select, #city-select');
+                if (sel) {{
+                    sel.value = {city_id};
+                    sel.dispatchEvent(new Event('change'));
+                }}
+            """)
+            if await _confirm_switched():
+                logger.info("Koloniewechsel zu %d via setPlanetSelectValue()", city_id)
+                return True
+        except Exception as e:
+            logger.debug("setPlanetSelectValue() fehlgeschlagen: %s", e)
+
+        # ── 4. Select-Element direkt per DOM setzen ───────────────────────
+        try:
+            switched = await self._page.evaluate(f"""
+                (() => {{
+                    const selectors = [
+                        'select[onchange]',
+                        '#planet-switcher',
+                        '#colony-select',
+                        '.planet-select',
+                    ];
+                    for (const s of selectors) {{
+                        const el = document.querySelector(s);
+                        if (el && el.tagName === 'SELECT') {{
+                            const opt = Array.from(el.options).find(o => +o.value === {city_id});
+                            if (opt) {{
+                                el.value = {city_id};
+                                el.dispatchEvent(new Event('change'));
+                                return true;
+                            }}
+                        }}
+                    }}
+                    return false;
+                }})()
+            """)
+            if switched and await _confirm_switched():
+                logger.info("Koloniewechsel zu %d via Select-DOM", city_id)
+                return True
+        except Exception as e:
+            logger.debug("Select-DOM fehlgeschlagen: %s", e)
 
         logger.warning("Koloniewechsel zu %d fehlgeschlagen — alle Methoden erfolglos.", city_id)
         return False
