@@ -454,11 +454,11 @@ class BotLoop:
                 known_ids.add(city_id)
 
         count = len(self._planet_cities)
-        record_activity(
-            "bot_action",
-            f"Planeten-Check ({label}): {count} bekannt",
-            f"{len(new_planets)} neu entdeckt" if new_planets else "keine neuen Planeten",
+        detail = (
+            f"{len(new_planets)} neu entdeckt" if new_planets
+            else f"keine neuen · JS:{len(js_planets)} API:{len(api_colonies)} Kand.:{len(all_candidates)}"
         )
+        record_activity("bot_action", f"Planeten-Check ({label}): {count} bekannt", detail)
 
         if new_planets:
             for col in new_planets:

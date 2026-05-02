@@ -268,8 +268,14 @@ def parse_state(raw: dict[str, Any]) -> GameState:
     research_lab_busy = bool(raw.get("research_lab_busy", active_research is not None))
 
     # Kolonieliste (andere Städte des Spielers)
+    # API gibt entweder Liste von Dicts {"id": X, ...} oder Integer-IDs [X, Y, ...]
     colonies_raw = city.get("colonies", [])
-    colonies = [dict(c) for c in colonies_raw if isinstance(c, dict)]
+    colonies = []
+    for c in (colonies_raw or []):
+        if isinstance(c, dict) and c.get("id"):
+            colonies.append(dict(c))
+        elif isinstance(c, (int, float)) and c:
+            colonies.append({"id": int(c)})
 
     return GameState(
         city_id=int(city.get("id", 0)),

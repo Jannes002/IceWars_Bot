@@ -299,57 +299,118 @@ class GameScraper:
         return await self._page.evaluate(_API_JS, endpoint)
 
     async def get_all_planets(self) -> list[dict]:
-        """Liest _allPlanets direkt aus dem Spiel-JavaScript aus.
+        """Liest alle Planeten aus dem Spiel.
 
-        _allPlanets ist eine globale JS-Variable mit allen Planeten des Spielers.
-        Zuverlässiger als die REST-API, die ggf. nur einen Teil zurückgibt.
-        Gibt eine Liste von Dicts mit mindestens {id, name, coords} zurück.
+        Strategie (mehrere Quellen, werden zusammengeführt):
+        1. loadPlanetSelector() aufrufen → befüllt _allPlanets im Spiel
+        2. _allPlanets JS-Variable auslesen
+        3. /api/city/ → colonies Feld (Fallback, auch Integer-IDs)
+        4. /api/colonies/ oder ähnliche Endpunkte probieren
+
+        Gibt Liste von Dicts mit mindestens {id} zurück.
         """
-        _ALL_PLANETS_JS = """
-        () => {
-            // Rohdaten loggen damit wir die echten Feldnamen sehen
-            if (typeof _allPlanets === 'undefined' || !_allPlanets) {
-                return {error: '_allPlanets nicht definiert', keys: Object.keys(window).filter(k => k.toLowerCase().includes('planet') || k.toLowerCase().includes('city') || k.toLowerCase().includes('colon'))};
-            }
-            if (!Array.isArray(_allPlanets)) {
-                return {error: '_allPlanets ist kein Array', type: typeof _allPlanets, value: JSON.stringify(_allPlanets).slice(0, 200)};
-            }
-            if (_allPlanets.length === 0) {
-                return {error: '_allPlanets ist leer'};
-            }
-            // Erstes Element als Diagnose zurückgeben
-            const sample = _allPlanets[0];
-            const planets = _allPlanets.map(p => ({
-                id:          p.id   || p.city_id  || p.cityId  || null,
-                name:        p.name || p.city_name || p.cityName || '',
-                coords:      p.coords || p.coord   || p.coordinates || '',
-                planet_type: p.planet_type || p.planetType || p.type || '',
-                _raw_keys:   Object.keys(p),
-            })).filter(p => p.id);
-            return {planets: planets, sample_keys: Object.keys(sample), count: _allPlanets.length};
+        _LOAD_AND_READ_JS = """
+        async (token) => {
+            const result = {planets: [], sources: [], errors: []};
+
+            // 1. loadPlanetSelector() aufrufen um _allPlanets zu befüllen
+            try {
+                if (typeof loadPlanetSelector === 'function') {
+                    loadPlanetSelector();
+                    result.sources.push('loadPlanetSelector_called');
+                }
+            } catch(e) { result.errors.push('loadPlanetSelector: ' + e.message); }
+
+            // 2. _allPlanets auslesen
+            try {
+                if (typeof _allPlanets !== 'undefined' && Array.isArray(_allPlanets) && _allPlanets.length > 0) {
+                    const sample = _allPlanets[0];
+                    result.allPlanets_keys = Object.keys(sample);
+                    result.allPlanets_sample = JSON.stringify(sample).slice(0, 300);
+                    for (const p of _allPlanets) {
+                        const id = p.id || p.city_id || p.cityId;
+                        if (id) result.planets.push({
+                            id, name: p.name || p.city_name || p.cityName || '',
+                            coords: p.coords || p.coord || p.coordinates || '',
+                            planet_type: p.planet_type || p.planetType || p.type || '',
+                            source: '_allPlanets',
+                        });
+                    }
+                    result.sources.push('_allPlanets:' + _allPlanets.length);
+                } else {
+                    result.allPlanets_status = typeof _allPlanets === 'undefined' ? 'undefined' : (Array.isArray(_allPlanets) ? 'empty_array' : typeof _allPlanets);
+                }
+            } catch(e) { result.errors.push('_allPlanets: ' + e.message); }
+
+            // 3. /api/city/ colonies Feld — raw
+            try {
+                const headers = {'Authorization': 'Bearer ' + token};
+                const r = await fetch('/api/city/', {headers});
+                if (r.ok) {
+                    const data = await r.json();
+                    const cols = data.colonies || [];
+                    result.colonies_raw_type = Array.isArray(cols) ? 'array[' + cols.length + ']' : typeof cols;
+                    result.colonies_sample = JSON.stringify(cols).slice(0, 300);
+                    const seenIds = new Set(result.planets.map(p => p.id));
+                    for (const c of cols) {
+                        let id = null;
+                        if (typeof c === 'number') id = c;
+                        else if (typeof c === 'object' && c) id = c.id || c.city_id;
+                        if (id && !seenIds.has(id)) {
+                            seenIds.add(id);
+                            const entry = {id, source: 'api_colonies'};
+                            if (typeof c === 'object' && c) {
+                                entry.name = c.name || c.city_name || '';
+                                entry.coords = c.coords || c.coord || '';
+                                entry.planet_type = c.planet_type || c.type || '';
+                            }
+                            result.planets.push(entry);
+                        }
+                    }
+                    result.sources.push('api_city_colonies');
+                }
+            } catch(e) { result.errors.push('api_city: ' + e.message); }
+
+            // 4. /api/colonies/ probieren
+            try {
+                const headers = {'Authorization': 'Bearer ' + token};
+                for (const ep of ['/api/colonies/', '/api/empire/', '/api/planets/']) {
+                    const r = await fetch(ep, {headers});
+                    if (r.ok) {
+                        const data = await r.json();
+                        result['extra_' + ep] = JSON.stringify(data).slice(0, 200);
+                        result.sources.push(ep);
+                        break;
+                    }
+                }
+            } catch(e) { result.errors.push('extra_endpoints: ' + e.message); }
+
+            return result;
         }
         """
         try:
-            result = await self._page.evaluate(_ALL_PLANETS_JS)
-            if isinstance(result, dict):
-                if "error" in result:
-                    # Diagnosemeldung — zeige verfügbare globale Variablen
-                    logger.info(
-                        "get_all_planets Diagnose: %s | verwandte window-Keys: %s",
-                        result.get("error"),
-                        result.get("keys", result.get("value", "")),
-                    )
-                    return []
-                planets = result.get("planets", [])
-                logger.info(
-                    "get_all_planets: %d Planeten aus _allPlanets (Felder: %s)",
-                    len(planets),
-                    result.get("sample_keys", []),
-                )
-                return planets
+            token = await self._page.evaluate("() => localStorage.getItem('icewars_token')")
+            result = await self._page.evaluate(_LOAD_AND_READ_JS, token)
+
+            if not isinstance(result, dict):
+                logger.warning("get_all_planets: unerwartetes Ergebnis: %s", result)
+                return []
+
+            # Diagnose-Ausgabe
+            logger.info(
+                "get_all_planets: %d Planeten | Quellen: %s | _allPlanets: %s | colonies_raw: %s | Fehler: %s",
+                len(result.get("planets", [])),
+                result.get("sources", []),
+                result.get("allPlanets_status", f"sample={result.get('allPlanets_sample', '')[:80]}"),
+                result.get("colonies_raw_type", "?") + " " + result.get("colonies_sample", "")[:80],
+                result.get("errors", []),
+            )
+
+            return result.get("planets", [])
+
         except Exception as e:
-            logger.warning("_allPlanets konnte nicht gelesen werden: %s", e)
-        return []
+            logger.warning("get_all_planets fehlgeschlagen: %s", e)
+            return []
 
     # HINWEIS: Schreibende API-Aufrufe wurden bewusst entfernt (UI-Only-Writes).
     # Allianz-Spenden laufen jetzt ausschließlich über
