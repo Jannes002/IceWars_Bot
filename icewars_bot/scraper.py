@@ -299,115 +299,91 @@ class GameScraper:
         return await self._page.evaluate(_API_JS, endpoint)
 
     async def get_all_planets(self) -> list[dict]:
-        """Liest alle Planeten aus dem Spiel.
+        """Liest alle Planeten aus dem DOM des Spiels (synchron, kein fetch).
 
-        Strategie (mehrere Quellen, werden zusammengeführt):
-        1. loadPlanetSelector() aufrufen → befüllt _allPlanets im Spiel
-        2. _allPlanets JS-Variable auslesen
-        3. /api/city/ → colonies Feld (Fallback, auch Integer-IDs)
-        4. /api/colonies/ oder ähnliche Endpunkte probieren
-
-        Gibt Liste von Dicts mit mindestens {id} zurück.
+        Strategie:
+        1. Planet-SELECT-Element aus dem DOM auslesen (Optionen = alle Planeten)
+        2. loadPlanetSelector() + _allPlanets als Fallback
+        Kein async fetch — verhindert "Failed to fetch"-Fehler.
         """
-        _LOAD_AND_READ_JS = """
-        async (token) => {
-            const result = {planets: [], sources: [], errors: []};
+        _READ_PLANETS_DOM_JS = """
+        () => {
+            const result = {planets: [], source: 'none', debug: []};
 
-            // 1. loadPlanetSelector() aufrufen um _allPlanets zu befüllen
+            // 1. loadPlanetSelector aufrufen damit _allPlanets befüllt wird
             try {
-                if (typeof loadPlanetSelector === 'function') {
-                    loadPlanetSelector();
-                    result.sources.push('loadPlanetSelector_called');
-                }
-            } catch(e) { result.errors.push('loadPlanetSelector: ' + e.message); }
+                if (typeof loadPlanetSelector === 'function') loadPlanetSelector();
+            } catch(e) { result.debug.push('loadPlanetSelector err: ' + e.message); }
 
-            // 2. _allPlanets auslesen
+            // 2. _allPlanets lesen (wird von loadPlanetSelector befüllt)
             try {
                 if (typeof _allPlanets !== 'undefined' && Array.isArray(_allPlanets) && _allPlanets.length > 0) {
-                    const sample = _allPlanets[0];
-                    result.allPlanets_keys = Object.keys(sample);
-                    result.allPlanets_sample = JSON.stringify(sample).slice(0, 300);
                     for (const p of _allPlanets) {
                         const id = p.id || p.city_id || p.cityId;
-                        if (id) result.planets.push({
-                            id, name: p.name || p.city_name || p.cityName || '',
+                        if (!id) continue;
+                        result.planets.push({
+                            id: +id,
+                            name: p.name || p.city_name || p.cityName || '',
                             coords: p.coords || p.coord || p.coordinates || '',
                             planet_type: p.planet_type || p.planetType || p.type || '',
-                            source: '_allPlanets',
                         });
                     }
-                    result.sources.push('_allPlanets:' + _allPlanets.length);
+                    result.source = '_allPlanets';
+                    result.debug.push('_allPlanets len=' + _allPlanets.length);
+                    result.sample = JSON.stringify(_allPlanets[0]).slice(0, 200);
                 } else {
-                    result.allPlanets_status = typeof _allPlanets === 'undefined' ? 'undefined' : (Array.isArray(_allPlanets) ? 'empty_array' : typeof _allPlanets);
+                    const ap = typeof _allPlanets;
+                    result.debug.push('_allPlanets status=' + ap + (Array.isArray(_allPlanets) ? '[' + _allPlanets.length + ']' : ''));
                 }
-            } catch(e) { result.errors.push('_allPlanets: ' + e.message); }
+            } catch(e) { result.debug.push('_allPlanets err: ' + e.message); }
 
-            // 3. /api/city/ colonies Feld — raw
-            try {
-                const headers = {'Authorization': 'Bearer ' + token};
-                const r = await fetch('/api/city/', {headers});
-                if (r.ok) {
-                    const data = await r.json();
-                    const cols = data.colonies || [];
-                    result.colonies_raw_type = Array.isArray(cols) ? 'array[' + cols.length + ']' : typeof cols;
-                    result.colonies_sample = JSON.stringify(cols).slice(0, 300);
-                    const seenIds = new Set(result.planets.map(p => p.id));
-                    for (const c of cols) {
-                        let id = null;
-                        if (typeof c === 'number') id = c;
-                        else if (typeof c === 'object' && c) id = c.id || c.city_id;
-                        if (id && !seenIds.has(id)) {
-                            seenIds.add(id);
-                            const entry = {id, source: 'api_colonies'};
-                            if (typeof c === 'object' && c) {
-                                entry.name = c.name || c.city_name || '';
-                                entry.coords = c.coords || c.coord || '';
-                                entry.planet_type = c.planet_type || c.type || '';
-                            }
-                            result.planets.push(entry);
+            // 3. Planet-SELECT-Element suchen (prevPlanet/nextPlanet Buttons sind daneben)
+            if (result.planets.length === 0) {
+                try {
+                    const selects = Array.from(document.querySelectorAll('select'));
+                    for (const sel of selects) {
+                        const oc = sel.getAttribute('onchange') || '';
+                        const id_attr = sel.id || '';
+                        const cls = sel.className || '';
+                        const isPlanetSel = oc.includes('Planet') || oc.includes('planet') || oc.includes('City') || oc.includes('changePlanet') ||
+                                           id_attr.toLowerCase().includes('planet') || cls.toLowerCase().includes('planet') ||
+                                           id_attr.toLowerCase().includes('colony') || id_attr.toLowerCase().includes('city');
+                        if (!isPlanetSel && sel.options.length < 2) continue;
+                        const opts = Array.from(sel.options).map(o => ({id: +o.value, name: o.text.trim()})).filter(o => o.id > 0);
+                        if (opts.length > 0) {
+                            result.debug.push('select found: id=' + id_attr + ' onchange=' + oc + ' opts=' + opts.length);
+                            result.source = 'dom_select';
+                            result.planets = opts;
+                            break;
                         }
                     }
-                    result.sources.push('api_city_colonies');
-                }
-            } catch(e) { result.errors.push('api_city: ' + e.message); }
+                } catch(e) { result.debug.push('select err: ' + e.message); }
+            }
 
-            // 4. /api/colonies/ probieren
-            try {
-                const headers = {'Authorization': 'Bearer ' + token};
-                for (const ep of ['/api/colonies/', '/api/empire/', '/api/planets/']) {
-                    const r = await fetch(ep, {headers});
-                    if (r.ok) {
-                        const data = await r.json();
-                        result['extra_' + ep] = JSON.stringify(data).slice(0, 200);
-                        result.sources.push(ep);
-                        break;
-                    }
-                }
-            } catch(e) { result.errors.push('extra_endpoints: ' + e.message); }
+            // 4. Alle SELECT-Elemente dumpen falls immer noch leer
+            if (result.planets.length === 0) {
+                const allSels = Array.from(document.querySelectorAll('select')).map(s => ({
+                    id: s.id, cls: s.className, oc: (s.getAttribute('onchange') || '').slice(0, 60),
+                    opts: s.options.length, first: s.options[0] ? s.options[0].value + '=' + s.options[0].text.slice(0, 20) : ''
+                }));
+                result.debug.push('all_selects: ' + JSON.stringify(allSels).slice(0, 500));
+            }
 
             return result;
         }
         """
         try:
-            token = await self._page.evaluate("() => localStorage.getItem('icewars_token')")
-            result = await self._page.evaluate(_LOAD_AND_READ_JS, token)
-
-            if not isinstance(result, dict):
-                logger.warning("get_all_planets: unerwartetes Ergebnis: %s", result)
-                return []
-
-            # Diagnose-Ausgabe
+            result = await self._page.evaluate(_READ_PLANETS_DOM_JS)
+            planets = result.get("planets", []) if isinstance(result, dict) else []
             logger.info(
-                "get_all_planets: %d Planeten | Quellen: %s | _allPlanets: %s | colonies_raw: %s | Fehler: %s",
-                len(result.get("planets", [])),
-                result.get("sources", []),
-                result.get("allPlanets_status", f"sample={result.get('allPlanets_sample', '')[:80]}"),
-                result.get("colonies_raw_type", "?") + " " + result.get("colonies_sample", "")[:80],
-                result.get("errors", []),
+                "get_all_planets: %d Planeten (Quelle: %s) | debug: %s",
+                len(planets),
+                result.get("source", "?"),
+                result.get("debug", []),
             )
-
-            return result.get("planets", [])
-
+            if result.get("sample"):
+                logger.info("get_all_planets _allPlanets sample: %s", result["sample"])
+            return planets
         except Exception as e:
             logger.warning("get_all_planets fehlgeschlagen: %s", e)
             return []
