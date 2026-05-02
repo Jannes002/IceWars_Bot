@@ -388,69 +388,95 @@ class BotLoop:
                 ts.clear_donate_recommended(res)
                 logger.debug("Spende-Reset: %s (%.0f%%)", res, ratio * 100)
 
-    _PLANET_SCAN_INTERVAL_S: int = 3600  # stündlich
+    _PLANET_SCAN_INTERVAL_S: int = 3600   # stündlich
+    _PLANET_STARTUP_SCAN_S: int  = 5 * 60 # 5 Minuten nach Start
+
+    async def _planet_scan(self, label: str) -> None:
+        """Führt einen einmaligen Planeten-Scan durch.
+
+        Nutzt primär _allPlanets (globale JS-Variable im Spiel), fällt auf
+        state.colonies aus der REST-API zurück. Neu gefundene Planeten werden
+        sofort gespeichert und per Telegram gemeldet.
+        """
+        if self._last_state is None:
+            logger.debug("Planeten-Scan (%s): kein State verfügbar, übersprungen.", label)
+            return
+
+        state = self._last_state
+
+        # Alle Planeten-Quellen zusammenführen
+        all_candidates: list[dict] = []
+
+        # 1. _allPlanets aus dem Spiel-JS (vollständigste Quelle)
+        js_planets = await self._scraper.get_all_planets()
+        if js_planets:
+            logger.debug("Planeten-Scan (%s): %d Planeten aus _allPlanets", label, len(js_planets))
+            all_candidates.extend(js_planets)
+        else:
+            logger.debug("Planeten-Scan (%s): _allPlanets leer/nicht verfügbar", label)
+
+        # 2. state.colonies aus REST-API (Fallback / Ergänzung)
+        for col in (state.colonies or []):
+            cid = col.get("id")
+            if cid and not any(c.get("id") == cid for c in all_candidates):
+                all_candidates.append(col)
+
+        # 3. Aktuelle Stadt immer einbeziehen
+        if state.city_id and not any(c.get("id") == state.city_id for c in all_candidates):
+            all_candidates.append({
+                "id":          state.city_id,
+                "name":        state.city_name or "",
+                "coords":      state.coords or "",
+                "planet_type": state.planet_type or "",
+            })
+
+        # Neu gegenüber bekannten Planeten ermitteln
+        known_ids = {c.get("id") for c in self._planet_cities if c.get("id")}
+        new_planets: list[dict] = []
+        for col in all_candidates:
+            city_id = col.get("id")
+            if not city_id:
+                continue
+            if city_id in self._excluded_planet_ids:
+                continue
+            if city_id not in known_ids:
+                new_planets.append(col)
+                known_ids.add(city_id)
+
+        count = len(self._planet_cities)
+        record_activity(
+            "bot_action",
+            f"Planeten-Check ({label}): {count} bekannt",
+            f"{len(new_planets)} neu entdeckt" if new_planets else "keine neuen Planeten",
+        )
+
+        if new_planets:
+            for col in new_planets:
+                self._planet_cities.append(dict(col))
+            planets_store.save(self._planet_cities)
+            names = [
+                f"{c.get('name', 'Unbekannt')} ({c.get('coords', '?')})"
+                for c in new_planets
+            ]
+            logger.info("Planeten-Scan (%s): neue Planeten: %s", label, ", ".join(names))
+            await self._notify(
+                "🌍 <b>Neuer Planet entdeckt</b>\n" +
+                "\n".join(f"• {n}" for n in names)
+            )
+        else:
+            logger.debug("Planeten-Scan (%s): keine neuen Planeten (%d Kandidaten geprüft).",
+                         label, len(all_candidates))
 
     async def _hourly_planet_scan(self) -> None:
-        """Prüft stündlich ob neue Planeten/Kolonien im Spiel vorhanden sind.
+        """Startet einen Scan 5 min nach Start und danach stündlich."""
+        # Erster Scan: 5 Minuten nach Start (gibt dem Bot Zeit sich einzuloggen)
+        await asyncio.sleep(self._PLANET_STARTUP_SCAN_S)
+        await self._planet_scan("Startup")
 
-        Vergleich über city_id — alle Kolonien aus dem API-Response werden mit
-        den bekannten Planeten abgeglichen. Neu gefundene werden direkt zur
-        Planetenliste hinzugefügt, damit sie nicht nächste Stunde erneut gemeldet werden.
-        """
-        await asyncio.sleep(self._PLANET_SCAN_INTERVAL_S)
+        # Dann stündlich
         while True:
-            state = self._last_state
-            if state is not None:
-                known_ids = {c.get("id") for c in self._planet_cities if c.get("id")}
-
-                # Alle dem Spiel bekannten Kolonien sammeln
-                all_colonies: list[dict] = list(state.colonies or [])
-                if state.city_id:
-                    # aktuelle Stadt ergänzen falls noch nicht enthalten
-                    if state.city_id not in {c.get("id") for c in all_colonies}:
-                        all_colonies.append({
-                            "id": state.city_id,
-                            "name": state.city_name or "",
-                            "coords": state.coords or "",
-                        })
-
-                new_planets: list[dict] = []
-                for col in all_colonies:
-                    city_id = col.get("id")
-                    if not city_id:
-                        continue
-                    if city_id in self._excluded_planet_ids:
-                        continue
-                    if city_id not in known_ids:
-                        new_planets.append(col)
-                        known_ids.add(city_id)
-
-                count = len(self._planet_cities)
-                record_activity(
-                    "bot_action",
-                    f"Planeten-Check: {count} bekannt",
-                    f"{len(new_planets)} neu entdeckt" if new_planets else "keine neuen Planeten",
-                )
-
-                if new_planets:
-                    # Neu gefundene Planeten sofort zur Liste hinzufügen
-                    for col in new_planets:
-                        self._planet_cities.append(dict(col))
-                    planets_store.save(self._planet_cities)
-
-                    names = [
-                        f"{c.get('name', 'Unbekannt')} ({c.get('coords', '?')})"
-                        for c in new_planets
-                    ]
-                    logger.info("Stündlicher Scan: neue Planeten gefunden: %s", ", ".join(names))
-                    await self._notify(
-                        "🌍 <b>Neuer Planet entdeckt (stündlicher Scan)</b>\n" +
-                        "\n".join(f"• {n}" for n in names)
-                    )
-                else:
-                    logger.debug("Stündlicher Planeten-Scan: keine neuen Planeten.")
-
             await asyncio.sleep(self._PLANET_SCAN_INTERVAL_S)
+            await self._planet_scan("stündlich")
 
     async def _telegram_listener(self) -> None:
         """Long-polling für Telegram-Befehle (/stop, /start).

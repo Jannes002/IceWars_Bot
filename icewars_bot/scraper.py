@@ -298,6 +298,34 @@ class GameScraper:
     async def _api_get(self, endpoint: str) -> dict[str, Any]:
         return await self._page.evaluate(_API_JS, endpoint)
 
+    async def get_all_planets(self) -> list[dict]:
+        """Liest _allPlanets direkt aus dem Spiel-JavaScript aus.
+
+        _allPlanets ist eine globale JS-Variable mit allen Planeten des Spielers.
+        Zuverlässiger als die REST-API, die ggf. nur einen Teil zurückgibt.
+        Gibt eine Liste von Dicts mit mindestens {id, name, coords} zurück.
+        """
+        _ALL_PLANETS_JS = """
+        () => {
+            if (typeof _allPlanets === 'undefined' || !Array.isArray(_allPlanets)) {
+                return null;
+            }
+            return _allPlanets.map(p => ({
+                id:          p.id   || p.city_id  || p.cityId  || null,
+                name:        p.name || p.city_name || '',
+                coords:      p.coords || p.coord   || '',
+                planet_type: p.planet_type || p.type || '',
+            })).filter(p => p.id);
+        }
+        """
+        try:
+            planets = await self._page.evaluate(_ALL_PLANETS_JS)
+            if planets:
+                return planets
+        except Exception as e:
+            logger.debug("_allPlanets konnte nicht gelesen werden: %s", e)
+        return []
+
     # HINWEIS: Schreibende API-Aufrufe wurden bewusst entfernt (UI-Only-Writes).
     # Allianz-Spenden laufen jetzt ausschließlich über
     # ``ActionExecutor.donate_to_alliance`` (actions.py), das die Web-UI bedient.
