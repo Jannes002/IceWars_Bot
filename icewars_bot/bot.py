@@ -410,13 +410,19 @@ class BotLoop:
         # 1. _allPlanets aus dem Spiel-JS (vollständigste Quelle)
         js_planets = await self._scraper.get_all_planets()
         if js_planets:
-            logger.debug("Planeten-Scan (%s): %d Planeten aus _allPlanets", label, len(js_planets))
+            logger.info("Planeten-Scan (%s): %d Planeten aus _allPlanets: %s",
+                        label, len(js_planets),
+                        [(c.get("id"), c.get("coords")) for c in js_planets])
             all_candidates.extend(js_planets)
         else:
-            logger.debug("Planeten-Scan (%s): _allPlanets leer/nicht verfügbar", label)
+            logger.info("Planeten-Scan (%s): _allPlanets leer/nicht verfügbar — nutze API-Fallback", label)
 
         # 2. state.colonies aus REST-API (Fallback / Ergänzung)
-        for col in (state.colonies or []):
+        api_colonies = state.colonies or []
+        logger.info("Planeten-Scan (%s): %d Kolonien aus REST-API: %s",
+                    label, len(api_colonies),
+                    [(c.get("id"), c.get("coords", c.get("name", "?"))) for c in api_colonies])
+        for col in api_colonies:
             cid = col.get("id")
             if cid and not any(c.get("id") == cid for c in all_candidates):
                 all_candidates.append(col)
@@ -432,12 +438,16 @@ class BotLoop:
 
         # Neu gegenüber bekannten Planeten ermitteln
         known_ids = {c.get("id") for c in self._planet_cities if c.get("id")}
+        logger.info("Planeten-Scan (%s): %d Kandidaten gesamt, %d bereits bekannt: %s",
+                    label, len(all_candidates), len(known_ids), sorted(known_ids))
+
         new_planets: list[dict] = []
         for col in all_candidates:
             city_id = col.get("id")
             if not city_id:
                 continue
             if city_id in self._excluded_planet_ids:
+                logger.debug("Planeten-Scan: %d ausgeschlossen (excluded)", city_id)
                 continue
             if city_id not in known_ids:
                 new_planets.append(col)

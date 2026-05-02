@@ -307,23 +307,48 @@ class GameScraper:
         """
         _ALL_PLANETS_JS = """
         () => {
-            if (typeof _allPlanets === 'undefined' || !Array.isArray(_allPlanets)) {
-                return null;
+            // Rohdaten loggen damit wir die echten Feldnamen sehen
+            if (typeof _allPlanets === 'undefined' || !_allPlanets) {
+                return {error: '_allPlanets nicht definiert', keys: Object.keys(window).filter(k => k.toLowerCase().includes('planet') || k.toLowerCase().includes('city') || k.toLowerCase().includes('colon'))};
             }
-            return _allPlanets.map(p => ({
+            if (!Array.isArray(_allPlanets)) {
+                return {error: '_allPlanets ist kein Array', type: typeof _allPlanets, value: JSON.stringify(_allPlanets).slice(0, 200)};
+            }
+            if (_allPlanets.length === 0) {
+                return {error: '_allPlanets ist leer'};
+            }
+            // Erstes Element als Diagnose zurückgeben
+            const sample = _allPlanets[0];
+            const planets = _allPlanets.map(p => ({
                 id:          p.id   || p.city_id  || p.cityId  || null,
-                name:        p.name || p.city_name || '',
-                coords:      p.coords || p.coord   || '',
-                planet_type: p.planet_type || p.type || '',
+                name:        p.name || p.city_name || p.cityName || '',
+                coords:      p.coords || p.coord   || p.coordinates || '',
+                planet_type: p.planet_type || p.planetType || p.type || '',
+                _raw_keys:   Object.keys(p),
             })).filter(p => p.id);
+            return {planets: planets, sample_keys: Object.keys(sample), count: _allPlanets.length};
         }
         """
         try:
-            planets = await self._page.evaluate(_ALL_PLANETS_JS)
-            if planets:
+            result = await self._page.evaluate(_ALL_PLANETS_JS)
+            if isinstance(result, dict):
+                if "error" in result:
+                    # Diagnosemeldung — zeige verfügbare globale Variablen
+                    logger.info(
+                        "get_all_planets Diagnose: %s | verwandte window-Keys: %s",
+                        result.get("error"),
+                        result.get("keys", result.get("value", "")),
+                    )
+                    return []
+                planets = result.get("planets", [])
+                logger.info(
+                    "get_all_planets: %d Planeten aus _allPlanets (Felder: %s)",
+                    len(planets),
+                    result.get("sample_keys", []),
+                )
                 return planets
         except Exception as e:
-            logger.debug("_allPlanets konnte nicht gelesen werden: %s", e)
+            logger.warning("_allPlanets konnte nicht gelesen werden: %s", e)
         return []
 
     # HINWEIS: Schreibende API-Aufrufe wurden bewusst entfernt (UI-Only-Writes).
