@@ -650,40 +650,46 @@ class BotLoop:
     def _update_planet_list(self, current_city_id: int, colonies: list[dict]) -> None:
         """Aktualisiert die bekannte Planetenliste aus den API-Koloniedaten.
 
-        ``colonies`` ist die Liste der ANDEREN Städte (aus city.colonies).
-        Die aktuelle Stadt wird anhand von ``current_city_id`` an der richtigen
-        Position in ``_planet_cities`` gehalten.
-
-        Neu erkannte Planeten werden gemeldet.
+        Wichtig: bekannte Planeten werden NIE entfernt — nur neue hinzugefügt und
+        vorhandene mit frischen Daten (name, coords) angereichert. So gehen Planeten
+        nicht verloren wenn die API temporär eine leere colonies-Liste zurückgibt.
         """
-        # Ausgeschlossene Planeten aus den colonies-Daten herausfiltern
-        colonies = [c for c in colonies
-                    if isinstance(c, dict) and c.get("id")
-                    and c.get("id") not in self._excluded_planet_ids]
+        # Index aufbauen: id → position in _planet_cities
+        known: dict[int, dict] = {
+            c["id"]: c for c in self._planet_cities if c.get("id")
+        }
 
-        known_ids = {c.get("id") for c in self._planet_cities}
-        new_planet_ids = {c.get("id") for c in colonies} - known_ids - {current_city_id}
+        # Aktuelle Stadt einpflegen (immer bekannt)
+        if current_city_id not in known:
+            known[current_city_id] = {"id": current_city_id}
 
-        # Vollständige Liste: aktuelle Stadt + alle Kolonien
-        all_cities: list[dict] = []
-        current_entry: dict | None = next(
-            (c for c in self._planet_cities if c.get("id") == current_city_id),
-            None,
-        )
-        if current_entry is None:
-            current_entry = {"id": current_city_id}
-        all_cities.append(current_entry)
+        # Kolonien aus der API einpflegen / anreichern
+        new_planet_ids: list[int] = []
+        for col in (colonies or []):
+            if not isinstance(col, dict):
+                continue
+            cid = col.get("id")
+            if not cid or cid in self._excluded_planet_ids:
+                continue
+            if cid not in known:
+                known[cid] = dict(col)
+                new_planet_ids.append(cid)
+            else:
+                # Vorhandene Daten mit frischeren Feldern anreichern (aber nicht überschreiben)
+                for key in ("name", "coords", "planet_type"):
+                    if col.get(key) and not known[cid].get(key):
+                        known[cid][key] = col[key]
 
-        for col in colonies:
-            all_cities.append(col)
+        # Reihenfolge stabil halten: bestehende Planeten vorne, neue hinten
+        existing_ids = [c["id"] for c in self._planet_cities if c.get("id") in known]
+        ordered_ids = existing_ids + [pid for pid in new_planet_ids if pid not in existing_ids]
+        # Aktuelle Stadt an Index 0 der aktuellen Runde setzen falls noch nicht drin
+        if current_city_id not in ordered_ids:
+            ordered_ids.insert(0, current_city_id)
 
-        # Index der aktuellen Stadt in der neuen Liste ermitteln
-        old_current_id = (
-            self._planet_cities[self._current_city_idx].get("id")
-            if self._planet_cities else current_city_id
-        )
-        self._planet_cities = all_cities
-        # Aktuellen Index auf die Stadt setzen, die gerade aktiv ist
+        self._planet_cities = [known[pid] for pid in ordered_ids if pid in known]
+
+        # Aktuellen Index auf aktive Stadt setzen
         for i, c in enumerate(self._planet_cities):
             if c.get("id") == current_city_id:
                 self._current_city_idx = i
@@ -691,7 +697,7 @@ class BotLoop:
 
         if new_planet_ids:
             names = [
-                next((c.get("name", str(pid)) for c in colonies if c.get("id") == pid), str(pid))
+                f"{known[pid].get('name', str(pid))} ({known[pid].get('coords', '?')})"
                 for pid in new_planet_ids
             ]
             logger.info("Neue Planeten/Kolonien entdeckt: %s", ", ".join(names))
