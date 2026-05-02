@@ -317,67 +317,166 @@ class GameScraper:
         import re
         return re.sub(r'\s*\(Bau:.*?\)', '', name).strip()
 
+    async def dump_colony_diagnostics(self) -> None:
+        """Einmalige Diagnose: liest alle Colony-relevanten DOM-Elemente + JS-Funktionen aus.
+
+        Schreibt das Ergebnis nach logs/colony_diagnostics.json für manuelle Analyse.
+        Wird beim ersten Start automatisch aufgerufen.
+        """
+        _DIAG_JS = """
+        () => {
+            const result = {
+                window_fns: [],
+                colony_elements: [],
+                onclick_samples: [],
+                global_keys_city: [],
+            };
+
+            // 1) Welche Funktionen gibt es auf window mit "city" im Namen?
+            result.window_fns = Object.getOwnPropertyNames(window)
+                .filter(k => typeof window[k] === 'function' &&
+                    /city|kolonie|colony|planet|select|switch/i.test(k));
+
+            // 2) Alle Elemente mit onclick die "city" enthalten
+            const allEls = document.querySelectorAll('[onclick]');
+            allEls.forEach(el => {
+                const oc = el.getAttribute('onclick') || '';
+                if (/city|kolonie|colony|planet/i.test(oc)) {
+                    result.onclick_samples.push({
+                        tag: el.tagName,
+                        id: el.id || '',
+                        class: el.className || '',
+                        onclick: oc.substring(0, 200),
+                        text: (el.textContent || '').trim().substring(0, 50),
+                    });
+                }
+            });
+
+            // 3) Elemente mit data-city* oder data-colony* oder data-planet* Attributen
+            const dataEls = document.querySelectorAll('[data-city-id],[data-id],[data-colony-id],[data-planet-id]');
+            dataEls.forEach(el => {
+                result.colony_elements.push({
+                    tag: el.tagName,
+                    id: el.id || '',
+                    class: el.className || '',
+                    dataset: JSON.stringify(el.dataset),
+                    onclick: (el.getAttribute('onclick') || '').substring(0, 200),
+                    href: el.getAttribute('href') || '',
+                    text: (el.textContent || '').trim().substring(0, 50),
+                });
+            });
+
+            // 4) window-Keys die "city" enthalten (auch nicht-Funktionen)
+            result.global_keys_city = Object.getOwnPropertyNames(window)
+                .filter(k => /city|kolonie|colony|planet/i.test(k))
+                .slice(0, 30);
+
+            return result;
+        }
+        """
+        try:
+            import json
+            import os
+            os.makedirs("logs", exist_ok=True)
+            data = await self._page.evaluate(_DIAG_JS)
+            out_path = "logs/colony_diagnostics.json"
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            logger.info("Colony-Diagnostik gespeichert: %s", out_path)
+            logger.info("window-Funktionen mit city/colony/planet: %s", data.get("window_fns", []))
+            logger.info("onclick-Samples: %d Elemente", len(data.get("onclick_samples", [])))
+            logger.info("data-*-Elemente: %d Elemente", len(data.get("colony_elements", [])))
+        except Exception as e:
+            logger.warning("Colony-Diagnostik fehlgeschlagen: %s", e)
+
     async def switch_to_city(self, city_id: int) -> bool:
         """Wechselt im Spiel zur Kolonie mit der gegebenen ID.
 
-        Reihenfolge:
-        1. Direkter API-POST (REST-Standard für Stadtauswahl)
-        2. JS-Funktionen (game-spezifische Kandidaten)
-        3. DOM-Klick auf Kolonieselektor-Elemente
-        4. URL-Navigation mit city_id-Parameter
-
-        Gibt True zurück wenn der Wechsel durch /api/city/ bestätigt wird.
+        Strategie: erst DOM nach echten onclick-Handlern durchsuchen,
+        dann bekannte JS-Funktionen und DOM-Selektoren probieren.
+        Gibt True zurück wenn /api/city/ die neue city_id bestätigt.
         """
-        async def _confirm_switched(wait: float = 1.5) -> bool:
-            """True wenn /api/city/ jetzt city_id zurückgibt."""
+        async def _confirm_switched(wait: float = 2.0) -> bool:
             try:
                 await asyncio.sleep(wait)
                 check = await self._api_get("/api/city/")
                 actual = int(check.get("id", -1))
                 if actual == city_id:
                     return True
-                logger.debug("Koloniewechsel-Check: API liefert city_id=%d, erwartet %d", actual, city_id)
+                logger.debug("Koloniewechsel-Check: API=%d erwartet=%d", actual, city_id)
                 return False
             except Exception as e:
                 logger.debug("Koloniewechsel-Check fehlgeschlagen: %s", e)
                 return False
 
-        # ── 1. Direkter API-POST ──────────────────────────────────────────
-        _SELECT_API_JS = """
-        async (city_id) => {
-            const token = localStorage.getItem('icewars_token');
-            const endpoints = [
-                '/api/city/select/',
-                '/api/city/switch/',
-                '/api/select_city/',
-                '/api/switch_city/',
-            ];
-            for (const ep of endpoints) {
-                try {
-                    const resp = await fetch(ep, {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': 'Bearer ' + token,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({city_id: city_id})
-                    });
-                    if (resp.ok) return {ok: true, endpoint: ep};
-                } catch(e) {}
+        # ── 1. DOM: onclick-Handler mit city_id direkt auslesen ──────────
+        # Suche nach Elementen die exakt diese city_id im onclick referenzieren
+        _FIND_COLONY_EL_JS = """
+        (city_id) => {
+            // onclick-Attribute durchsuchen
+            const all = document.querySelectorAll('[onclick]');
+            for (const el of all) {
+                const oc = el.getAttribute('onclick') || '';
+                if (oc.includes(String(city_id))) {
+                    return {found: true, method: 'onclick', onclick: oc,
+                            tag: el.tagName, id: el.id, cls: el.className};
+                }
             }
-            return {ok: false};
+            // href mit city_id
+            const links = document.querySelectorAll('a[href]');
+            for (const el of links) {
+                const h = el.getAttribute('href') || '';
+                if (h.includes(String(city_id))) {
+                    return {found: true, method: 'href', href: h,
+                            tag: el.tagName, id: el.id, cls: el.className};
+                }
+            }
+            return {found: false};
         }
         """
         try:
-            result = await self._page.evaluate(_SELECT_API_JS, city_id)
-            if result.get("ok"):
-                if await _confirm_switched():
-                    logger.info("Koloniewechsel zu %d via API-POST: %s", city_id, result.get("endpoint"))
-                    return True
+            info = await self._page.evaluate(_FIND_COLONY_EL_JS, city_id)
+            if info.get("found"):
+                method = info.get("method")
+                if method == "onclick":
+                    # onclick direkt ausführen
+                    onclick_code = info["onclick"]
+                    logger.debug("Führe onclick aus: %s", onclick_code)
+                    await self._page.evaluate(onclick_code)
+                    if await _confirm_switched():
+                        logger.info("Koloniewechsel zu %d via onclick: %s", city_id, onclick_code[:80])
+                        return True
+                elif method == "href":
+                    href = info["href"]
+                    base = self._page.url.split("?")[0].rstrip("/")
+                    target = href if href.startswith("http") else base + href
+                    await self._page.goto(target, wait_until="domcontentloaded")
+                    if await _confirm_switched():
+                        logger.info("Koloniewechsel zu %d via href: %s", city_id, href)
+                        return True
         except Exception as e:
-            logger.debug("API-POST-Versuch fehlgeschlagen: %s", e)
+            logger.debug("DOM-onclick-Suche fehlgeschlagen: %s", e)
 
-        # ── 2. JS-Funktionen ─────────────────────────────────────────────
+        # ── 2. Klick auf DOM-Selektoren ───────────────────────────────────
+        dom_selectors = [
+            f"[data-city-id='{city_id}']",
+            f"[data-id='{city_id}']",
+            f"[data-colony-id='{city_id}']",
+            f"#city-{city_id}",
+            f".colony[data-id='{city_id}']",
+        ]
+        for sel in dom_selectors:
+            try:
+                el = await self._page.query_selector(sel)
+                if el:
+                    await el.click()
+                    if await _confirm_switched(wait=2.5):
+                        logger.info("Koloniewechsel zu %d via DOM-Klick: %s", city_id, sel)
+                        return True
+            except Exception:
+                continue
+
+        # ── 3. Bekannte JS-Funktionen probieren ───────────────────────────
         js_candidates = [
             f"selectCity({city_id})",
             f"switchCity({city_id})",
@@ -389,7 +488,6 @@ class GameScraper:
             f"City.load({city_id})",
             f"Game.switchCity({city_id})",
             f"app.selectCity({city_id})",
-            f"window.selectCity({city_id})",
         ]
         for expr in js_candidates:
             try:
@@ -400,43 +498,36 @@ class GameScraper:
             except Exception:
                 continue
 
-        # ── 3. DOM-Klick ─────────────────────────────────────────────────
-        dom_selectors = [
-            f"[data-city-id='{city_id}']",
-            f"[data-id='{city_id}']",
-            f"[data-colony-id='{city_id}']",
-            f".colony-item[data-id='{city_id}']",
-            f"#city-{city_id}",
-            f"a[href*='city={city_id}']",
-            f"a[href*='city_id={city_id}']",
-            f"a[href*='id={city_id}']",
-        ]
-        for sel in dom_selectors:
-            try:
-                el = await self._page.query_selector(sel)
-                if el:
-                    await el.click()
-                    if await _confirm_switched(wait=2.5):
-                        logger.info("Koloniewechsel zu %d via DOM: %s", city_id, sel)
-                        return True
-            except Exception:
-                continue
-
-        # ── 4. URL-Navigation ────────────────────────────────────────────
+        # ── 4. API-POST an bekannte Endpunkte ─────────────────────────────
+        _POST_JS = """
+        async (city_id) => {
+            const token = localStorage.getItem('icewars_token');
+            const eps = ['/api/city/select/', '/api/city/switch/',
+                         '/api/select_city/', '/api/city/' + city_id + '/select/'];
+            for (const ep of eps) {
+                try {
+                    const r = await fetch(ep, {
+                        method: 'POST',
+                        headers: {'Authorization': 'Bearer ' + token,
+                                  'Content-Type': 'application/json'},
+                        body: JSON.stringify({city_id})
+                    });
+                    if (r.ok) return {ok: true, ep};
+                } catch(e) {}
+            }
+            return {ok: false};
+        }
+        """
         try:
-            base_url = self._page.url.split("?")[0].rstrip("/")
-            for param in [f"?city_id={city_id}", f"?city={city_id}", f"?id={city_id}"]:
-                await self._page.goto(base_url + param, wait_until="domcontentloaded")
-                if await _confirm_switched(wait=2.0):
-                    logger.info("Koloniewechsel zu %d via URL-Navigation: %s", city_id, param)
+            result = await self._page.evaluate(_POST_JS, city_id)
+            if result.get("ok"):
+                if await _confirm_switched():
+                    logger.info("Koloniewechsel zu %d via API-POST: %s", city_id, result.get("ep"))
                     return True
         except Exception as e:
-            logger.debug("URL-Navigation fehlgeschlagen: %s", e)
+            logger.debug("API-POST fehlgeschlagen: %s", e)
 
-        logger.warning(
-            "Koloniewechsel zu %d fehlgeschlagen — alle Methoden (API-POST, JS, DOM, URL) erfolglos.",
-            city_id,
-        )
+        logger.warning("Koloniewechsel zu %d fehlgeschlagen — alle Methoden erfolglos.", city_id)
         return False
 
     async def scrape(self) -> dict[str, Any]:

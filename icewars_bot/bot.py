@@ -1213,6 +1213,9 @@ class BotLoop:
 
             # Initialzustand beim ersten Scrape merken
             if self._stats.initial_resources is None:
+                # Colony-Diagnostik: einmalig DOM + JS-Funktionen analysieren
+                await self._scraper.dump_colony_diagnostics()
+
                 # seen-Sets initial befüllen, damit beim Boot keine Flut alter
                 # 'Forschung abgeschlossen' / 'neues Gebäude'-Meldungen raus geht.
                 already_done = [r.type for r in (state.research or []) if r.is_researched and r.type]
