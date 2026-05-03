@@ -1034,6 +1034,11 @@ async function loadPlanetSwitcher() {
     }
     const activeCityId = colonies.current_city_id;
 
+    // Beim ersten Laden: aktiven Planeten vorauswählen
+    if (_selectedPlanetId === null && activeCityId) {
+      _selectedPlanetId = activeCityId;
+    }
+
     const card = document.getElementById('planet-switcher-card');
     const bar  = document.getElementById('planet-switcher');
     card.style.display = '';
@@ -1042,8 +1047,7 @@ async function loadPlanetSwitcher() {
       const name   = p.name || nameMap[p.city_id] || `ID ${p.city_id}`;
       const coords = p.coords || '';
       const isActive = p.city_id === activeCityId;
-      const isSelected = _selectedPlanetId === p.city_id ||
-                         (_selectedPlanetId === null && isActive);
+      const isSelected = p.city_id === _selectedPlanetId;
       return `<button class="planet-chip ${isSelected ? 'active' : ''}"
                       onclick="selectPlanet(${p.city_id})"
                       data-city="${p.city_id}">
@@ -1060,6 +1064,7 @@ function selectPlanet(cityId) {
     c.classList.toggle('active', parseInt(c.dataset.city) === cityId);
   });
   refreshOverviewData();
+  loadCharts();
 }
 
 /* ── Overview: Status polling ──────────────────────────────────────── */
@@ -1072,7 +1077,10 @@ async function refreshOverviewData() {
     ]);
     updateMetrics(tasks, latest);
     updateResources(latest);
-    if (!_selectedPlanetId) {
+    // Queue und Empfehlung nur für aktiven Planeten zeigen
+    const colonies = await api('/api/colonies');
+    const isActive = !_selectedPlanetId || _selectedPlanetId === colonies.current_city_id;
+    if (isActive) {
       updateQueue(tasks);
       updateRecommended(tasks);
     }
