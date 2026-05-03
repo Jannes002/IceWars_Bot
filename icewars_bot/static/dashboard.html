@@ -902,6 +902,50 @@
         </div>
       </div>
 
+      <!-- Bunker-Schwellenwerte -->
+      <div class="settings-section" id="sec-bunker">
+        <div class="settings-section-header" onclick="toggleSection('sec-bunker')">
+          <span class="settings-section-title">
+            <span class="settings-section-icon">🛡</span> Bunker-Kapazität
+          </span>
+          <span class="settings-chevron">▼</span>
+        </div>
+        <div class="settings-body">
+          <p class="form-hint" style="margin-bottom:12px">Mindest-Bunkerkapazität pro Ressource als Anteil der Lagerkapazität (0 = deaktiviert, z.B. 20 = 20% der Lagerkapazität).</p>
+          <div class="form-row">
+            <label>Eisen-Bunker (%)</label>
+            <input type="number" id="g-bunker-iron" min="0" max="100" step="1" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>Stahl-Bunker (%)</label>
+            <input type="number" id="g-bunker-steel" min="0" max="100" step="1" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>Chemie-Bunker (%)</label>
+            <input type="number" id="g-bunker-chemicals" min="0" max="100" step="1" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>Eis-Bunker (%)</label>
+            <input type="number" id="g-bunker-ice" min="0" max="100" step="1" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>Wasser-Bunker (%)</label>
+            <input type="number" id="g-bunker-water" min="0" max="100" step="1" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>Energie-Bunker (%)</label>
+            <input type="number" id="g-bunker-energy" min="0" max="100" step="1" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>VV4A-Bunker (%)</label>
+            <input type="number" id="g-bunker-vv4a" min="0" max="100" step="1" placeholder="0">
+          </div>
+          <div class="row mt-12">
+            <button class="btn btn-primary" onclick="saveBunkerThresholds()">Speichern</button>
+          </div>
+        </div>
+      </div>
+
     </div><!-- /stack -->
   </section><!-- /tab-settings -->
 
@@ -1516,6 +1560,13 @@ function applyGoalsToForm(g) {
   setVal('g-pop-max', g.pop_free_max != null ? Math.round(g.pop_free_max * 100) : 40);
   setVal('g-credits-warn', g.credits_warn_balance ?? 50);
   setVal('g-storage-thresh', g.storage_threshold != null ? Math.round(g.storage_threshold * 100) : 80);
+  // Bunker thresholds
+  const bt = g.bunker_thresholds || {};
+  const bunkerRes = ['iron','steel','chemicals','ice','water','energy','vv4a'];
+  for (const r of bunkerRes) {
+    const val = bt[r] != null ? Math.round(bt[r] * 100) : 0;
+    setVal('g-bunker-' + r, val);
+  }
 }
 
 function setVal(id, val) {
@@ -1588,6 +1639,19 @@ async function saveThresholds() {
   try {
     await api('/api/goals', 'POST', patch);
     toast('Schwellenwerte gespeichert');
+  } catch(e) { toast('Fehler beim Speichern', 'error'); }
+}
+
+async function saveBunkerThresholds() {
+  const bunkerRes = ['iron','steel','chemicals','ice','water','energy','vv4a'];
+  const thresholds = {};
+  for (const r of bunkerRes) {
+    const el = document.getElementById('g-bunker-' + r);
+    thresholds[r] = el ? parseFloat(el.value) / 100 : 0.0;
+  }
+  try {
+    await api('/api/goals', 'POST', { bunker_thresholds: thresholds });
+    toast('Bunker-Schwellenwerte gespeichert');
   } catch(e) { toast('Fehler beim Speichern', 'error'); }
 }
 

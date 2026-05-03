@@ -68,6 +68,17 @@ STORAGE_BUILDINGS: dict[str, tuple[str, str]] = {
     "vv4a":      ("vv4a_storage_small",  "VV4A-Lager"),
 }
 
+# ── Ressource → Bunkergebäude ─────────────────────────────────────────────────
+BUNKER_BUILDINGS: dict[str, tuple[str, str]] = {
+    "iron":      ("iron_bunker",      "Eisenbunker"),
+    "steel":     ("steel_bunker",     "Stahlbunker"),
+    "chemicals": ("chem_bunker",      "Chemiebunker"),
+    "ice":       ("ice_water_bunker", "Eis-/Wasserbunker"),
+    "water":     ("ice_water_bunker", "Eis-/Wasserbunker"),
+    "energy":    ("energy_bunker",    "Energiebunker"),
+    "vv4a":      ("vv4a_bunker",      "VV4A-Bunker"),
+}
+
 # ── Ressource → Produktionsgebäude (Legacy-Fallback für negative Rate) ───────
 PRODUCTION_BUILDINGS: dict[str, tuple[str, str]] = {
     "iron":      ("iron_mine_small",       "Kleine Eisenmine"),
@@ -633,6 +644,11 @@ class Strategy:
         if storage_action:
             return storage_action
 
+        # 5b) Bunker zu klein?
+        bunker_action = self._check_bunker(state)
+        if bunker_action:
+            return bunker_action
+
         # 6) Normaler Gebäudebau — beste Ressourcenproduktion steigern
         action = self._build_best_growth(state)
         if action:
@@ -1026,6 +1042,85 @@ class Strategy:
                 "resource": resource,
                 "fill_ratio": round(ratio, 3),
             })
+        return None
+
+    # ──────────────────────────────────────────────────────────────────────
+    #  Bunker
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _check_bunker(self, state: GameState) -> Optional[Action]:
+        """Baut einen Bunker wenn die Bunkerkapazität unter dem Schwellwert liegt.
+
+        Der Schwellwert wird pro Ressource in den Goals als Anteil der
+        Lagerkapazität definiert (z.B. 0.20 = 20 % der Lagerkapazität als Bunker).
+        """
+        thresholds = G.bunker_thresholds()
+        queued_types = {item.building_type for item in state.build_queue}
+
+        for resource, threshold in thresholds.items():
+            if threshold <= 0.0:
+                continue
+            if G.is_resource_paused(resource):
+                continue
+
+            # Ziel-Bunkerkapazität = Lagerkapazität × Schwellwert
+            storage_cap = getattr(state.capacity, resource, 0)
+            if storage_cap <= 0:
+                continue
+            target_bunker = storage_cap * threshold
+
+            # Aktuelle Bunkerkapazität aus state.bunker_capacity
+            # Keys können resource-Name oder resource+"_bunker" sein
+            current_bunker = 0.0
+            bc = state.bunker_capacity
+            if isinstance(bc, dict):
+                current_bunker = float(
+                    bc.get(resource, bc.get(f"{resource}_bunker", 0)) or 0
+                )
+
+            if current_bunker >= target_bunker:
+                logger.debug(
+                    "Bunker %s OK: %.0f/%.0f (Ziel: %.0f%%)",
+                    resource, current_bunker, target_bunker, threshold * 100,
+                )
+                continue
+
+            logger.info(
+                "Bunker-Alarm %s: %.0f < %.0f (Ziel %.0f%% von %.0f Lagerkapazität)",
+                resource, current_bunker, target_bunker, threshold * 100, storage_cap,
+            )
+
+            # Bunker-Gebäude aus Live-API finden
+            if state.buildings:
+                # Effekt-Key für Bunkerkapazität (z.B. "iron_bunker_capacity")
+                eff_key = f"{resource}_bunker_capacity"
+                if resource in ("ice", "water"):
+                    eff_key = "ice_water_bunker_capacity"
+                picked = _pick_best(
+                    state.buildings,
+                    effect_key=eff_key,
+                    categories=("bunker",),
+                )
+                if picked:
+                    best, score = picked
+                    if best.type not in queued_types:
+                        return Action("build_specific", {
+                            "building_type": best.type,
+                            "building_name": best.name,
+                            "reason": f"Bunker {resource} {current_bunker:.0f}/{target_bunker:.0f} (Ziel {threshold*100:.0f}%)",
+                        })
+
+            # Legacy-Fallback
+            entry = BUNKER_BUILDINGS.get(resource)
+            if entry:
+                btype, bname = entry
+                if btype not in queued_types and not cooldown.is_on_cooldown(btype):
+                    return Action("build_specific", {
+                        "building_type": btype,
+                        "building_name": bname,
+                        "reason": f"Bunker {resource} {current_bunker:.0f}/{target_bunker:.0f} (Ziel {threshold*100:.0f}%)",
+                    })
+
         return None
 
     # ──────────────────────────────────────────────────────────────────────

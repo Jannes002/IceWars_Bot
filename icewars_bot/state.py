@@ -156,6 +156,10 @@ class GameState:
     # Jeder Eintrag hat mindestens: id, name, coords.
     colonies: list = field(default_factory=list)
 
+    # Bunker-Kapazität pro Ressource (aus city.bunker API-Feld)
+    # Keys: "iron", "steel", "chemicals", "ice", "water", "energy", "vv4a", "pop"
+    bunker_capacity: dict = field(default_factory=dict)
+
     @property
     def free_pop_ratio(self) -> float:
         """Freie Bevölkerung als Anteil der maximalen Bevölkerung (0.0 – 1.0)."""
@@ -277,6 +281,18 @@ def parse_state(raw: dict[str, Any]) -> GameState:
         elif isinstance(c, (int, float)) and c:
             colonies.append({"id": int(c)})
 
+    # Bunker-Kapazität (city.bunker — Format variiert je nach API-Version)
+    bunker_raw = city.get("bunker", {})
+    bunker_capacity: dict[str, float] = {}
+    if isinstance(bunker_raw, dict):
+        # Format 1: {"iron": 5000, "steel": 3000, ...}
+        # Format 2: {"iron": {"capacity": 5000}, ...}
+        for res, val in bunker_raw.items():
+            if isinstance(val, (int, float)):
+                bunker_capacity[res] = float(val)
+            elif isinstance(val, dict):
+                bunker_capacity[res] = float(val.get("capacity", val.get("cap", 0)))
+
     return GameState(
         city_id=int(city.get("id", 0)),
         city_name=str(city.get("name", "")),
@@ -303,4 +319,5 @@ def parse_state(raw: dict[str, Any]) -> GameState:
         points=int(city.get("points", 0)),
         raw=raw,
         colonies=colonies,
+        bunker_capacity=bunker_capacity,
     )

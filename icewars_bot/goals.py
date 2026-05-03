@@ -52,6 +52,17 @@ DEFAULTS: dict[str, Any] = {
     # Auto-Lager: wenn False baut der Bot keine Lagergebäude mehr.
     "auto_storage_enabled": True,
 
+    # Bunker: Mindest-Bunkerkapazität als Anteil der Lagerkapazität (0.0 = deaktiviert)
+    "bunker_thresholds": {
+        "iron":      0.0,
+        "steel":     0.0,
+        "chemicals": 0.0,
+        "ice":       0.0,
+        "water":     0.0,
+        "energy":    0.0,
+        "vv4a":      0.0,
+    },
+
     # Mindest-Ressourcenmengen (Display-Ziele im Dashboard, keine Bot-Logik)
     "resource_targets": {
         "iron":      0.0,
@@ -81,6 +92,7 @@ def _load_from_disk() -> dict[str, Any]:
         merged = dict(DEFAULTS)
         merged.update(stored)
         merged["resource_targets"] = {**DEFAULTS["resource_targets"], **stored.get("resource_targets", {})}
+        merged["bunker_thresholds"] = {**DEFAULTS["bunker_thresholds"], **stored.get("bunker_thresholds", {})}
         return merged
     except Exception as e:
         logger.error("goals.json Ladefehler: %s — nutze Defaults.", e)
@@ -121,6 +133,9 @@ def update(patch: dict[str, Any]) -> dict[str, Any]:
         if "resource_targets" in patch and isinstance(patch["resource_targets"], dict):
             _goals["resource_targets"].update(patch["resource_targets"])
             patch = {k: v for k, v in patch.items() if k != "resource_targets"}
+        if "bunker_thresholds" in patch and isinstance(patch["bunker_thresholds"], dict):
+            _goals["bunker_thresholds"].update(patch["bunker_thresholds"])
+            patch = {k: v for k, v in patch.items() if k != "bunker_thresholds"}
         _goals.update(patch)
         _save_to_disk(_goals)
         logger.info("Ziele aktualisiert und gespeichert.")
@@ -184,3 +199,14 @@ def is_resource_paused(resource: str) -> bool:
     if not resource:
         return False
     return resource in paused_resources()
+
+
+def bunker_thresholds() -> dict[str, float]:
+    """Bunker-Schwellwerte pro Ressource (0.0 = deaktiviert)."""
+    raw = get().get("bunker_thresholds", DEFAULTS["bunker_thresholds"])
+    result = dict(DEFAULTS["bunker_thresholds"])
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if k in result:
+                result[k] = float(v)
+    return result
