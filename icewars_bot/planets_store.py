@@ -8,11 +8,17 @@ Felder pro Planet (persistent):
 
 Felder die beim Start zurückgesetzt werden:
     _build_free_at  (Bauwarteschlangen-Status unbekannt nach Neustart)
+
+Datei-Sicherheit:
+    Schreibvorgänge sind atomar (temp-Datei + os.replace), damit der Bot bei
+    einem harten Kill (OOM, SIGKILL) niemals eine leere/korrupte planets.json
+    hinterlässt.  Eine .bak-Datei enthält den letzten guten Stand als Fallback.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -20,32 +26,88 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 PLANETS_PATH = Path("data/planets.json")
+_BACKUP_PATH  = Path("data/planets.json.bak")
 _PERSIST_KEYS = {"id", "name", "coords", "planet_type", "_last_visited"}
 
 _lock = threading.Lock()
 
 
-def _load_raw() -> dict:
-    if not PLANETS_PATH.exists():
-        return {"known": [], "excluded": []}
+# ── Interne Helfer ────────────────────────────────────────────────────────────
+
+def _load_file(path: Path) -> dict | None:
+    """Liest und parst eine JSON-Datei. Gibt None zurück wenn nicht vorhanden oder korrupt."""
+    if not path.exists():
+        return None
     try:
-        with open(PLANETS_PATH, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        if "known" not in data:
-            data["known"] = []
-        if "excluded" not in data:
-            data["excluded"] = []
+        if not isinstance(data, dict):
+            raise ValueError("Ungültiges Format (kein Dict)")
+        data.setdefault("known", [])
+        data.setdefault("excluded", [])
         return data
     except Exception as e:
-        logger.error("planets.json Ladefehler: %s", e)
-        return {"known": [], "excluded": []}
+        logger.error("planets_store: Fehler beim Laden von %s: %s", path.name, e)
+        return None
+
+
+def _load_raw() -> dict:
+    """Lädt planets.json, fällt auf Backup zurück wenn nötig.
+
+    Gibt immer ein valides Dict zurück — niemals None.
+    """
+    # 1. Primärdatei versuchen
+    data = _load_file(PLANETS_PATH)
+    if data is not None:
+        return data
+
+    # 2. Backup versuchen (falls Primärdatei fehlt oder korrupt ist)
+    if PLANETS_PATH.exists():
+        # Datei existiert, aber ist korrupt → Backup versuchen
+        backup = _load_file(_BACKUP_PATH)
+        if backup is not None:
+            logger.warning(
+                "planets.json korrupt — verwende Backup (%d Planeten).",
+                len(backup.get("known", [])),
+            )
+            return backup
+        logger.error(
+            "planets.json korrupt und kein Backup verfügbar — starte mit leerer Liste."
+        )
+    # Datei existiert schlicht nicht (Erststart)
+    return {"known": [], "excluded": []}
 
 
 def _save_raw(data: dict) -> None:
-    PLANETS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(PLANETS_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    """Schreibt data atomar in PLANETS_PATH.
 
+    Strategie: in eine temp-Datei schreiben, dann os.replace() (atomar auf POSIX).
+    Die zuletzt erfolgreiche Datei wird zusätzlich als .bak gesichert.
+    """
+    PLANETS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PLANETS_PATH.with_suffix(".json.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        # Vor dem Überschreiben ein Backup der letzten guten Datei anlegen
+        if PLANETS_PATH.exists():
+            try:
+                import shutil
+                shutil.copy2(PLANETS_PATH, _BACKUP_PATH)
+            except Exception as e:
+                logger.debug("Backup-Kopie fehlgeschlagen (nicht kritisch): %s", e)
+        # Atomares Umbenennen — ersetzt PLANETS_PATH in einem Schritt
+        os.replace(tmp, PLANETS_PATH)
+    except Exception:
+        # Temp-Datei aufräumen falls vorhanden
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
+# ── Öffentliche API ───────────────────────────────────────────────────────────
 
 def load() -> tuple[list[dict], set[int]]:
     """Gibt (known_planets, excluded_ids) zurück.
@@ -59,16 +121,27 @@ def load() -> tuple[list[dict], set[int]]:
         data = _load_raw()
         planets = []
         for p in data.get("known", []):
+            if not isinstance(p, dict) or not p.get("id"):
+                continue
             entry = {k: v for k, v in p.items() if k in _PERSIST_KEYS}
             entry.setdefault("_last_visited", 0)
-            entry["_build_free_at"] = 0   # nach Neustart unbekannt
+            entry["_build_free_at"] = 0
             planets.append(entry)
-        excluded = set(int(x) for x in data.get("excluded", []))
+        excluded = set(int(x) for x in data.get("excluded", []) if x)
+        logger.info(
+            "Planeten geladen: %d bekannt, %d ausgeschlossen (Quelle: %s)",
+            len(planets),
+            len(excluded),
+            "planets.json" if PLANETS_PATH.exists() else "leer",
+        )
         return planets, excluded
 
 
 def save(planet_cities: list[dict]) -> None:
-    """Speichert die aktuelle Planetenliste (nur persistente Felder)."""
+    """Speichert die aktuelle Planetenliste (nur persistente Felder).
+
+    Schreibt atomar — die Datei ist niemals in einem Zwischenzustand.
+    """
     with _lock:
         data = _load_raw()
         data["known"] = [
@@ -85,7 +158,7 @@ def remove(city_id: int) -> None:
     with _lock:
         data = _load_raw()
         data["known"] = [p for p in data["known"] if p.get("id") != city_id]
-        excluded = set(int(x) for x in data.get("excluded", []))
+        excluded = set(int(x) for x in data.get("excluded", []) if x)
         excluded.add(city_id)
         data["excluded"] = sorted(excluded)
         _save_raw(data)

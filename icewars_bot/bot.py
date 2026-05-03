@@ -208,6 +208,14 @@ class BotLoop:
             self._record_to_db()
             self._end_db_session()
             self._log_final_status()
+            # Planetenliste explizit sichern — stellt sicher dass alle bekannten
+            # Planeten auch bei sauberem Shutdown auf Disk landen.
+            if self._planet_cities:
+                try:
+                    planets_store.save(self._planet_cities)
+                    logger.info("Planetenliste beim Shutdown gespeichert: %d Einträge", len(self._planet_cities))
+                except Exception as e:
+                    logger.error("Planetenliste-Save beim Shutdown fehlgeschlagen: %s", e)
             ts.set_status("stopped")
             record_activity(
                 "bot_stop", "Bot gestoppt",
