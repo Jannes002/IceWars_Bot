@@ -63,6 +63,16 @@ DEFAULTS: dict[str, Any] = {
         "vv4a":      0.0,
     },
 
+    # Telegram-Benachrichtigungen: pro Typ ein/ausschalten
+    "notify_daily_report":      True,   # 📊 Tagesbericht (täglich 11:30)
+    "notify_rank_change":       True,   # 📈📉 Rang-Änderung
+    "notify_new_planet":        True,   # 🌍 Neuer Planet/Kolonie entdeckt
+    "notify_build_complete":    True,   # 🏗️ Gebäude fertig gebaut
+    "notify_new_building_type": True,   # 🏗 Neues Gebäude freigeschaltet (unbekannter Typ)
+    "notify_research_complete": True,   # ✅ Forschung abgeschlossen
+    "notify_browser_restart":   True,   # ⚠️ Browser-Neustart / Bot-Fehler
+    "notify_donation":          True,   # 🤝 Allianz-Spende
+
     # Mindest-Ressourcenmengen (Display-Ziele im Dashboard, keine Bot-Logik)
     "resource_targets": {
         "iron":      0.0,
@@ -199,6 +209,11 @@ def is_resource_paused(resource: str) -> bool:
     if not resource:
         return False
     return resource in paused_resources()
+
+
+def notification_enabled(key: str) -> bool:
+    """True wenn die Benachrichtigung mit ``key`` aktiviert ist (Standard: True)."""
+    return bool(get().get(key, True))
 
 
 def bunker_thresholds() -> dict[str, float]:

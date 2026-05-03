@@ -290,7 +290,7 @@ class BotLoop:
             f"  💰 Credits    : {r.credits:>12,.1f}  ({rt.credits:+,.1f}/h)",
             f"  🔬 FP         : {_fmt(r.fp,         rt.fp)}",
         ]
-        await self._notify("\n".join(lines))
+        await self._notify_if("notify_daily_report", "\n".join(lines))
         logger.info("Tagesbericht gesendet.")
 
     async def _send_highscore(self) -> None:
@@ -469,7 +469,8 @@ class BotLoop:
                 for c in new_planets
             ]
             logger.info("Planeten-Scan (%s): neue Planeten: %s", label, ", ".join(names))
-            await self._notify(
+            await self._notify_if(
+                "notify_new_planet",
                 "🌍 <b>Neuer Planet entdeckt</b>\n" +
                 "\n".join(f"• {n}" for n in names)
             )
@@ -613,6 +614,11 @@ class BotLoop:
         if self._tg:
             await self._tg.send(text)
 
+    async def _notify_if(self, key: str, text: str) -> None:
+        """Sendet eine Telegram-Nachricht nur wenn der Benachrichtigungstyp aktiviert ist."""
+        if goals.notification_enabled(key):
+            await self._notify(text)
+
     def _extract_rank(self, raw: dict) -> Optional[int]:
         """Liest den eigenen Rang aus den Highscore-Daten (Kategorie 'points')."""
         username = self._config.auth.username.lower()
@@ -637,7 +643,7 @@ class BotLoop:
                 f"({direction} um {abs(diff)})"
             )
             logger.info("Rang-Änderung: %d → %d", self._last_rank, current_rank)
-            await self._notify(msg)
+            await self._notify_if("notify_rank_change", msg)
         self._last_rank = current_rank
 
     # ── Multi-Planet-Rotation ─────────────────────────────────────────────────
@@ -701,7 +707,8 @@ class BotLoop:
                 for pid in new_planet_ids
             ]
             logger.info("Neue Planeten/Kolonien entdeckt: %s", ", ".join(names))
-            asyncio.ensure_future(self._notify(
+            asyncio.ensure_future(self._notify_if(
+                "notify_new_planet",
                 "🌍 <b>Neue Kolonie entdeckt!</b>\n" +
                 "\n".join(f"• {n}" for n in names)
             ))
@@ -983,7 +990,8 @@ class BotLoop:
                 "build_complete", f"{name}{level_part} fertig", colony,
                 city_id=state.city_id,
             )
-            await self._notify(
+            await self._notify_if(
+                "notify_build_complete",
                 f"🏗️ <b>{name}</b>{level_part} auf {colony} ist fertig"
             )
 
@@ -1008,7 +1016,8 @@ class BotLoop:
                         fh.write(f"{datetime.datetime.now().isoformat()} {btype} {name}\n")
                 except Exception:
                     pass
-                await self._notify(
+                await self._notify_if(
+                    "notify_new_building_type",
                     f"🏗 <b>Neues Gebäude entdeckt</b>\n<code>{btype}</code> — {name}"
                 )
 
@@ -1032,7 +1041,8 @@ class BotLoop:
                     unlocks.strip() if unlocks else "",
                     city_id=state.city_id,
                 )
-                await self._notify(
+                await self._notify_if(
+                    "notify_research_complete",
                     f"✅ <b>Forschung abgeschlossen</b>\n{r.name}{unlocks}"
                 )
 
@@ -1097,12 +1107,14 @@ class BotLoop:
         success = await self._executor.donate_to_alliance({resource: amount})
         if success:
             ts.clear_donate_recommended(resource)
-            await self._notify(
+            await self._notify_if(
+                "notify_donation",
                 f"🤝 <b>Allianz-Spende: {label}</b>\n"
                 f"{amount:,} gespendet (via Dashboard)"
             )
         else:
-            await self._notify(
+            await self._notify_if(
+                "notify_donation",
                 f"⚠️ <b>Spende fehlgeschlagen: {label}</b>\n"
                 f"Browser-Aktion gescheitert"
             )
@@ -1133,9 +1145,9 @@ class BotLoop:
         success = await self._executor.donate_to_alliance(donations)
         summary = "\n".join(details)
         if success:
-            await self._notify(f"🤝 <b>Allianz-Spende (/spenden)</b>\n{summary}")
+            await self._notify_if("notify_donation", f"🤝 <b>Allianz-Spende (/spenden)</b>\n{summary}")
         else:
-            await self._notify(f"⚠️ <b>Spende fehlgeschlagen</b>\n{summary}")
+            await self._notify_if("notify_donation", f"⚠️ <b>Spende fehlgeschlagen</b>\n{summary}")
 
     # ── Telegram: Priorität setzen ──────────────────────────────────────
 
@@ -1407,7 +1419,8 @@ class BotLoop:
             if self._consecutive_failures >= self._config.bot.max_retries:
                 logger.warning("Max. Fehler erreicht — Browser-Neustart.")
                 self._stats.browser_restarts += 1
-                await self._notify(
+                await self._notify_if(
+                    "notify_browser_restart",
                     f"⚠️ <b>Bot-Fehler: Browser-Neustart</b>\n"
                     f"Fehler: <code>{type(e).__name__}</code>\n"
                     f"Neustart #{self._stats.browser_restarts}"

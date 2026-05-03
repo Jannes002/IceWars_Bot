@@ -844,6 +844,102 @@
         </div>
       </div>
 
+      <!-- Telegram-Benachrichtigungen -->
+      <div class="settings-section" id="sec-notifications">
+        <div class="settings-section-header" onclick="toggleSection('sec-notifications')">
+          <span class="settings-section-title">
+            <span class="settings-section-icon">🔔</span> Telegram-Benachrichtigungen
+          </span>
+          <span class="settings-chevron">▼</span>
+        </div>
+        <div class="settings-body">
+          <p class="form-hint" style="margin-bottom:12px">Welche Ereignisse sollen per Telegram gemeldet werden?</p>
+          <div class="form-row inline">
+            <div>
+              <div class="toggle-label">📊 Tagesbericht</div>
+              <div class="label-sub">Täglicher Statusbericht (11:30 Uhr)</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="notif-daily-report">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="form-row inline">
+            <div>
+              <div class="toggle-label">📈📉 Rang-Änderung</div>
+              <div class="label-sub">Benachrichtigung bei Rangveränderung</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="notif-rank-change">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="form-row inline">
+            <div>
+              <div class="toggle-label">🌍 Neuer Planet/Kolonie</div>
+              <div class="label-sub">Neuer Planet oder Kolonie entdeckt</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="notif-new-planet">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="form-row inline">
+            <div>
+              <div class="toggle-label">🏗️ Gebäude fertig</div>
+              <div class="label-sub">Gebäude fertig gebaut</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="notif-build-complete">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="form-row inline">
+            <div>
+              <div class="toggle-label">🏗 Neues Gebäude freigeschaltet</div>
+              <div class="label-sub">Unbekannter Gebäude-Typ entdeckt</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="notif-new-building-type">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="form-row inline">
+            <div>
+              <div class="toggle-label">✅ Forschung abgeschlossen</div>
+              <div class="label-sub">Forschung erfolgreich abgeschlossen</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="notif-research-complete">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="form-row inline">
+            <div>
+              <div class="toggle-label">⚠️ Browser-Neustart / Bot-Fehler</div>
+              <div class="label-sub">Bot startet Browser nach Fehler neu</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="notif-browser-restart">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="form-row inline">
+            <div>
+              <div class="toggle-label">🤝 Allianz-Spende</div>
+              <div class="label-sub">Spende über Dashboard oder /spenden-Befehl</div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="notif-donation">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="row mt-12">
+            <button class="btn btn-primary" onclick="saveNotifications()">Speichern</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Strategie-Schwellenwerte -->
       <div class="settings-section" id="sec-thresholds">
         <div class="settings-section-header" onclick="toggleSection('sec-thresholds')">
@@ -1567,6 +1663,15 @@ function applyGoalsToForm(g) {
     const val = bt[r] != null ? Math.round(bt[r] * 100) : 0;
     setVal('g-bunker-' + r, val);
   }
+  // Notification toggles
+  setVal('notif-daily-report',      g.notify_daily_report      !== false);
+  setVal('notif-rank-change',       g.notify_rank_change       !== false);
+  setVal('notif-new-planet',        g.notify_new_planet        !== false);
+  setVal('notif-build-complete',    g.notify_build_complete    !== false);
+  setVal('notif-new-building-type', g.notify_new_building_type !== false);
+  setVal('notif-research-complete', g.notify_research_complete !== false);
+  setVal('notif-browser-restart',   g.notify_browser_restart   !== false);
+  setVal('notif-donation',          g.notify_donation          !== false);
 }
 
 function setVal(id, val) {
@@ -1611,6 +1716,23 @@ async function savePausedResources() {
     await api('/api/goals', 'POST', { paused_resources: paused });
     toast('Ressourcen-Einstellungen gespeichert');
     _goals.paused_resources = paused;
+  } catch(e) { toast('Fehler beim Speichern', 'error'); }
+}
+
+async function saveNotifications() {
+  const patch = {
+    notify_daily_report:      document.getElementById('notif-daily-report').checked,
+    notify_rank_change:       document.getElementById('notif-rank-change').checked,
+    notify_new_planet:        document.getElementById('notif-new-planet').checked,
+    notify_build_complete:    document.getElementById('notif-build-complete').checked,
+    notify_new_building_type: document.getElementById('notif-new-building-type').checked,
+    notify_research_complete: document.getElementById('notif-research-complete').checked,
+    notify_browser_restart:   document.getElementById('notif-browser-restart').checked,
+    notify_donation:          document.getElementById('notif-donation').checked,
+  };
+  try {
+    await api('/api/goals', 'POST', patch);
+    toast('Benachrichtigungseinstellungen gespeichert');
   } catch(e) { toast('Fehler beim Speichern', 'error'); }
 }
 
