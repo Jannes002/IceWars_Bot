@@ -10,7 +10,7 @@ services:
         ipv4_address: 10.0.0.63
 
     ports:
-      - "10.0.0.63:8:8050"
+      - "10.0.0.63:80:8050"
 
     volumes:
       - /mnt/user/appdata/icewars-bot/data:/app/data
