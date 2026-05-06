@@ -553,6 +553,12 @@
       <span class="status-dot"></span>
       <span id="header-status-text">Verbinden…</span>
     </div>
+    <a id="logout-btn" href="/logout" title="Abmelden"
+       style="display:none;padding:4px 10px;border-radius:20px;font-size:.78rem;font-weight:600;
+              color:var(--text-muted);border:1px solid var(--border);background:var(--bg-elevated);
+              white-space:nowrap;text-decoration:none;">
+      ⏏ Abmelden
+    </a>
   </div>
 </header>
 
@@ -785,6 +791,12 @@
           <div class="form-row">
             <label>Telegram Chat-ID</label>
             <input type="text" id="s-tg-chat" placeholder="-100123456789">
+          </div>
+          <div class="divider"></div>
+          <div class="form-row">
+            <label>Dashboard-Passwort</label>
+            <input type="password" id="s-dashboard-password" placeholder="Leer lassen = kein Passwort">
+            <span class="form-hint">Schützt den Dashboard-Zugang. Leer lassen zum Deaktivieren.</span>
           </div>
           <div class="row mt-12">
             <button class="btn btn-primary" onclick="saveCredentials()">Speichern</button>
@@ -1692,6 +1704,9 @@ function applyCredsStatus(c) {
   } else {
     bar.innerHTML = '<span class="text-amber">⚠ Zugangsdaten nicht konfiguriert</span>';
   }
+  // Show/hide logout button based on whether a dashboard password is set
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) logoutBtn.style.display = c.dashboard_password_set ? '' : 'none';
 }
 
 function buildResPauseGrid(paused) {
@@ -1794,17 +1809,21 @@ async function saveCredentials() {
   const pass = document.getElementById('s-password').value;
   const token = document.getElementById('s-tg-token').value.trim();
   const chat = document.getElementById('s-tg-chat').value.trim();
+  const dashpw = document.getElementById('s-dashboard-password').value;
   if (url)  body.game_url = url;
   if (user) body.username = user;
   if (pass) body.password = pass;
   if (token) body.telegram_token = token;
   if (chat)  body.telegram_chat_id = chat;
+  // dashboard_password: always send (empty string = disable auth)
+  body.dashboard_password = dashpw;
   if (!Object.keys(body).length) { toast('Keine Änderungen', 'error'); return; }
   try {
     const res = await api('/api/setup', 'POST', body);
     applyCredsStatus(res);
     document.getElementById('s-password').value = '';
     document.getElementById('s-tg-token').value = '';
+    document.getElementById('s-dashboard-password').value = '';
     toast('Zugangsdaten gespeichert');
   } catch(e) { toast('Fehler beim Speichern', 'error'); }
 }

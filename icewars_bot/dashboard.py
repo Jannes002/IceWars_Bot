@@ -10,12 +10,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
+import os
+import secrets
 import sys
+import time
+from http.cookies import SimpleCookie
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote, unquote
 
 from .db import (
     get_snapshots, get_sessions, get_latest_snapshot, get_snapshot_count,
@@ -33,6 +38,152 @@ from . import planets_store
 logger = logging.getLogger(__name__)
 
 DASHBOARD_HTML = (Path(__file__).parent / "static" / "dashboard.html").resolve()
+
+# ── Session-Store (in-memory; Sessions laufen bei Bot-Neustart ab) ────────────
+_sessions: dict[str, float] = {}       # token → expiry (Unix-Timestamp)
+_SESSION_MAX_AGE_S: int = 8 * 3600    # 8 Stunden
+
+
+def _get_dashboard_password() -> str:
+    """Liest das Dashboard-Passwort.
+
+    Reihenfolge: Umgebungsvariable → credentials.json.
+    Leerer String bedeutet: kein Passwort gesetzt → kein Auth.
+    """
+    pw = os.environ.get("ICEWARS_DASHBOARD_PASSWORD", "").strip()
+    if pw:
+        return pw
+    return creds.load().get("dashboard_password", "").strip()
+
+
+def _is_authenticated(cookie_header: str) -> bool:
+    """True wenn der Cookie einen gültigen, nicht abgelaufenen Session-Token enthält."""
+    if not cookie_header:
+        return False
+    try:
+        c = SimpleCookie(cookie_header)
+        morsel = c.get("icewars_session")
+        if not morsel:
+            return False
+        expiry = _sessions.get(morsel.value, 0)
+        return expiry > time.time()
+    except Exception:
+        return False
+
+
+def _cleanup_sessions() -> None:
+    """Entfernt abgelaufene Sessions."""
+    now = time.time()
+    for token in list(_sessions):
+        if _sessions[token] < now:
+            del _sessions[token]
+
+
+_LOGIN_HTML = """\
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IceWars Bot — Login</title>
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      background: #080d18;
+      color: #c8d0e0;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }}
+    .card {{
+      background: #111827;
+      border: 1px solid #1e2d4a;
+      border-radius: 14px;
+      padding: 2.5rem 2.25rem;
+      width: 100%;
+      max-width: 360px;
+      box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    }}
+    .logo {{
+      text-align: center;
+      margin-bottom: 2rem;
+    }}
+    .logo h1 {{
+      font-size: 1.6rem;
+      color: #4da6ff;
+      font-weight: 700;
+      letter-spacing: -.5px;
+    }}
+    .logo p {{
+      margin-top: .3rem;
+      font-size: .82rem;
+      color: #4a5a70;
+    }}
+    label {{
+      display: block;
+      font-size: .82rem;
+      color: #7a8fa8;
+      margin-bottom: .4rem;
+      font-weight: 500;
+      letter-spacing: .02em;
+    }}
+    input[type=password] {{
+      width: 100%;
+      padding: .7rem 1rem;
+      background: #0d1520;
+      border: 1px solid #1e2d4a;
+      border-radius: 8px;
+      color: #c8d0e0;
+      font-size: 1rem;
+      outline: none;
+      transition: border-color .15s;
+    }}
+    input[type=password]:focus {{ border-color: #4da6ff; }}
+    button {{
+      width: 100%;
+      padding: .72rem;
+      background: #4da6ff;
+      color: #080d18;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 1.2rem;
+      transition: background .15s;
+    }}
+    button:hover {{ background: #3d96ef; }}
+    .error {{
+      background: rgba(255,80,80,.1);
+      border: 1px solid rgba(255,80,80,.3);
+      border-radius: 7px;
+      padding: .55rem .9rem;
+      color: #ff6868;
+      font-size: .82rem;
+      margin-bottom: 1.2rem;
+    }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <h1>🧊 IceWars Bot</h1>
+      <p>Dashboard-Zugang</p>
+    </div>
+    {error_block}
+    <form method="POST" action="/login">
+      <input type="hidden" name="next" value="{next_url}">
+      <label for="pw">Passwort</label>
+      <input type="password" id="pw" name="password"
+             autofocus autocomplete="current-password" placeholder="••••••••">
+      <button type="submit">Anmelden</button>
+    </form>
+  </div>
+</body>
+</html>
+"""
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -60,20 +211,127 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # ── Auth-Hilfsmethoden ────────────────────────────────────────────────
+
+    def _check_auth(self) -> bool:
+        """True wenn kein Passwort konfiguriert ODER Session gültig ist."""
+        if not _get_dashboard_password():
+            return True
+        return _is_authenticated(self.headers.get("Cookie", ""))
+
+    def _redirect(self, location: str, status: int = 302) -> None:
+        self.send_response(status)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _auth_redirect(self, next_url: str = "/") -> None:
+        """Leitet zur Login-Seite um. Merkt sich die ursprüngliche URL."""
+        # Nur relative Pfade als next-Ziel erlauben (Open-Redirect verhindern)
+        safe_next = next_url if next_url.startswith("/") else "/"
+        self._redirect(f"/login?next={quote(safe_next, safe='')}")
+
+    def _make_session_cookie(self, token: str, max_age: int) -> str:
+        """Erzeugt den Set-Cookie Header-Wert (Secure nur bei HTTPS)."""
+        proto = self.headers.get("X-Forwarded-Proto", "http")
+        secure = "; Secure" if proto == "https" else ""
+        return (
+            f"icewars_session={token}; HttpOnly; SameSite=Lax"
+            f"; Max-Age={max_age}; Path=/{secure}"
+        )
+
+    def _clear_session_cookie(self) -> str:
+        return "icewars_session=; HttpOnly; SameSite=Lax; Max-Age=0; Path=/"
+
+    def _serve_login(self, next_url: str = "/", error: str = "") -> None:
+        error_block = (
+            f'<div class="error">{error}</div>' if error else ""
+        )
+        # Sanitize next_url: nur relative Pfade
+        safe_next = next_url if next_url.startswith("/") else "/"
+        html = _LOGIN_HTML.format(
+            error_block=error_block,
+            next_url=safe_next,
+        )
+        self._html_response(html)
+
+    def _handle_login_post(self, body: bytes) -> None:
+        """Verarbeitet das Login-Formular."""
+        from urllib.parse import parse_qs as _parse_qs
+        try:
+            form = _parse_qs(body.decode("utf-8", errors="replace"))
+            password = form.get("password", [""])[0]
+            next_url = form.get("next", ["/"])[0]
+            # Nur relative Pfade erlauben
+            if not next_url.startswith("/"):
+                next_url = "/"
+        except Exception:
+            password, next_url = "", "/"
+
+        expected = _get_dashboard_password()
+        if expected and secrets.compare_digest(
+            password.encode("utf-8"), expected.encode("utf-8")
+        ):
+            token = secrets.token_hex(32)
+            _sessions[token] = time.time() + _SESSION_MAX_AGE_S
+            _cleanup_sessions()
+            logger.info(
+                "Dashboard-Login erfolgreich von %s.",
+                self.headers.get("X-Forwarded-For") or self.headers.get("X-Real-IP") or self.address_string(),
+            )
+            self.send_response(302)
+            self.send_header("Location", next_url)
+            self.send_header("Set-Cookie", self._make_session_cookie(token, _SESSION_MAX_AGE_S))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        else:
+            logger.warning(
+                "Dashboard-Login fehlgeschlagen von %s.",
+                self.headers.get("X-Forwarded-For") or self.headers.get("X-Real-IP") or self.address_string(),
+            )
+            self._serve_login(next_url, "Falsches Passwort")
+
+    def _handle_logout(self) -> None:
+        """Löscht die Session und leitet zur Login-Seite."""
+        try:
+            c = SimpleCookie(self.headers.get("Cookie", ""))
+            morsel = c.get("icewars_session")
+            if morsel and morsel.value in _sessions:
+                del _sessions[morsel.value]
+        except Exception:
+            pass
+        self.send_response(302)
+        self.send_header("Location", "/login")
+        self.send_header("Set-Cookie", self._clear_session_cookie())
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length)
+
+            # ── Login (kein Auth nötig) ────────────────────────────────────
+            if parsed.path == "/login":
+                self._handle_login_post(body)
+                return
+
+            # ── Auth ──────────────────────────────────────────────────────
+            if not self._check_auth():
+                self._json_response({"error": "Nicht angemeldet"}, 401)
+                return
+
+            # ── Geschützte POST-Routen ─────────────────────────────────────
             data = json.loads(body) if body else {}
 
             if parsed.path == "/api/goals":
                 updated = G.update(data)
                 self._json_response(updated)
             elif parsed.path == "/api/setup":
-                # Speichert Zugangsdaten — gibt NIE Passwörter/Tokens zurück
                 allowed = {"game_url", "username", "password",
-                           "telegram_token", "telegram_chat_id"}
+                           "telegram_token", "telegram_chat_id",
+                           "dashboard_password"}
                 filtered = {k: v for k, v in data.items() if k in allowed and isinstance(v, str)}
                 if not filtered:
                     self._json_response({"error": "Keine gültigen Felder"}, 400)
@@ -140,6 +398,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
 
         try:
+            # ── Auth-freie Routen ─────────────────────────────────────────
+            if path == "/login":
+                self._serve_login(
+                    next_url=qs.get("next", ["/"])[0],
+                    error=qs.get("error", [""])[0],
+                )
+                return
+            if path == "/logout":
+                self._handle_logout()
+                return
+            if path == "/api/setup/status":
+                # Healthcheck + Dashboard-Konfig → immer frei
+                self._json_response(creds.status())
+                return
+
+            # ── Auth ──────────────────────────────────────────────────────
+            if not self._check_auth():
+                if path.startswith("/api/"):
+                    self._json_response({"error": "Nicht angemeldet"}, 401)
+                else:
+                    self._auth_redirect(path)
+                return
+
+            # ── Geschützte Routen ─────────────────────────────────────────
             if path == "/" or path == "/index.html":
                 self._serve_dashboard()
             elif path == "/api/snapshots":
@@ -174,8 +456,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 })
             elif path == "/api/goals":
                 self._json_response(G.get())
-            elif path == "/api/setup/status":
-                self._json_response(creds.status())
             elif path == "/api/colonies":
                 snapshots = ts.get_colonies_snapshots()
                 self._json_response({

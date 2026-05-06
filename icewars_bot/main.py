@@ -250,11 +250,12 @@ def _bootstrap_credentials_from_env() -> None:
     Bereits vorhandene credentials.json wird NICHT überschrieben.
     """
     env_map = {
-        "game_url":         os.environ.get("ICEWARS_GAME_URL", "").strip(),
-        "username":         os.environ.get("ICEWARS_USERNAME", "").strip(),
-        "password":         os.environ.get("ICEWARS_PASSWORD", "").strip(),
-        "telegram_token":   os.environ.get("ICEWARS_TG_TOKEN", "").strip(),
-        "telegram_chat_id": os.environ.get("ICEWARS_TG_CHAT_ID", "").strip(),
+        "game_url":           os.environ.get("ICEWARS_GAME_URL", "").strip(),
+        "username":           os.environ.get("ICEWARS_USERNAME", "").strip(),
+        "password":           os.environ.get("ICEWARS_PASSWORD", "").strip(),
+        "telegram_token":     os.environ.get("ICEWARS_TG_TOKEN", "").strip(),
+        "telegram_chat_id":   os.environ.get("ICEWARS_TG_CHAT_ID", "").strip(),
+        "dashboard_password": os.environ.get("ICEWARS_DASHBOARD_PASSWORD", "").strip(),
     }
     provided = {k: v for k, v in env_map.items() if v}
     if not provided:

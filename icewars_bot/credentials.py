@@ -79,4 +79,5 @@ def status() -> dict[str, Any]:
             data.get("telegram_token", "").strip()
             and data.get("telegram_chat_id", "").strip()
         ),
+        "dashboard_password_set": bool(data.get("dashboard_password", "").strip()),
     }
