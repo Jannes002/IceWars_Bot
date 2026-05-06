@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
 
     networks:
-      icewars_net:
+      lan:
         ipv4_address: 10.0.0.63
 
     ports:
@@ -27,11 +27,6 @@ services:
       start_period: 30s
 
 networks:
-  icewars_net:
-    driver: macvlan
-    driver_opts:
-      parent: eth0        # Netzwerk-Interface des Hosts – ggf. anpassen (z. B. bond0, ens3)
-    ipam:
-      config:
-        - subnet: 10.0.0.0/23
-          gateway: 10.0.0.1
+  lan:
+    external: true
+    name: mealplanner_lan
