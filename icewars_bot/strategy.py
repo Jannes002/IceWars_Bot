@@ -79,6 +79,20 @@ BUNKER_BUILDINGS: dict[str, tuple[str, str]] = {
     "vv4a":      ("vv4a_bunker",      "VV4A-Bunker"),
 }
 
+# ── Ressource → Bunker-Effekt-Key in next_level_effect ────────────────────────
+# Wird in _check_bunker genutzt um das beste Bunkergebäude via _pick_best zu
+# finden. Die Keys entsprechen den tatsächlichen Feldern im Live-API-Response
+# (nicht "_bunker_capacity" wie fälschlicherweise früher angenommen).
+_BUNKER_EFFECT_KEYS: dict[str, str] = {
+    "iron":      "iron_bunker",
+    "steel":     "steel_bunker",
+    "chemicals": "chemicals_bunker",   # Achtung: Gebäudetyp heißt "chem_bunker"
+    "ice":       "ice_bunker",         # ice_water_bunker hat BEIDE Keys (ice+water)
+    "water":     "water_bunker",
+    "energy":    "energy_bunker",
+    "vv4a":      "vv4a_bunker",
+}
+
 # ── Ressource → Produktionsgebäude (Legacy-Fallback für negative Rate) ───────
 PRODUCTION_BUILDINGS: dict[str, tuple[str, str]] = {
     "iron":      ("iron_mine_small",       "Kleine Eisenmine"),
@@ -1092,14 +1106,13 @@ class Strategy:
 
             # Bunker-Gebäude aus Live-API finden
             if state.buildings:
-                # Effekt-Key für Bunkerkapazität (z.B. "iron_bunker_capacity")
-                eff_key = f"{resource}_bunker_capacity"
-                if resource in ("ice", "water"):
-                    eff_key = "ice_water_bunker_capacity"
+                # Effekt-Key aus Mapping — z.B. "iron_bunker", "chemicals_bunker"
+                # Bunker-Gebäude liegen in der Kategorie "storage" (nicht "bunker"!)
+                eff_key = _BUNKER_EFFECT_KEYS.get(resource, f"{resource}_bunker")
                 picked = _pick_best(
                     state.buildings,
                     effect_key=eff_key,
-                    categories=("bunker",),
+                    categories=("storage",),
                 )
                 if picked:
                     best, score = picked
