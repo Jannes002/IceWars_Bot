@@ -5,8 +5,12 @@ services:
     container_name: icewars-bot
     restart: unless-stopped
 
+    networks:
+      icewars_net:
+        ipv4_address: 192.168.100.2
+
     ports:
-      - "8050:8050"
+      - "192.168.100.2:8:8050"
 
     volumes:
       - /mnt/user/appdata/icewars-bot/data:/app/data
@@ -21,3 +25,13 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+networks:
+  icewars_net:
+    driver: macvlan
+    driver_opts:
+      parent: eth0        # Netzwerk-Interface des Hosts – ggf. anpassen (z. B. bond0, ens3)
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24
+          gateway: 192.168.100.1
