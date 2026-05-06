@@ -7,10 +7,10 @@ services:
 
     networks:
       icewars_net:
-        ipv4_address: 192.168.100.2
+        ipv4_address: 10.0.0.63
 
     ports:
-      - "192.168.100.2:8:8050"
+      - "10.0.0.63:8:8050"
 
     volumes:
       - /mnt/user/appdata/icewars-bot/data:/app/data
@@ -33,5 +33,5 @@ networks:
       parent: eth0        # Netzwerk-Interface des Hosts – ggf. anpassen (z. B. bond0, ens3)
     ipam:
       config:
-        - subnet: 192.168.100.0/24
-          gateway: 192.168.100.1
+        - subnet: 10.0.0.0/23
+          gateway: 10.0.0.1
