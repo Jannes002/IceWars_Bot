@@ -386,6 +386,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     ts.request_donate(resource, amount)
                     logger.info("Donate-Anfrage vom Dashboard: %s=%d", resource, amount)
                     self._json_response({"queued": True})
+            elif parsed.path.startswith("/api/planets/") and parsed.path.endswith("/settings"):
+                # PATCH /api/planets/<city_id>/settings
+                parts = parsed.path.strip("/").split("/")
+                # erwartetes Format: api/planets/<id>/settings → 4 Teile
+                if len(parts) == 4:
+                    try:
+                        city_id = int(parts[2])
+                    except ValueError:
+                        self._json_response({"error": "Ungültige city_id"}, 400)
+                        return
+                    allowed_keys = {"paused", "priority_resource", "auto_donate", "donate_threshold"}
+                    patch = {k: v for k, v in data.items() if k in allowed_keys}
+                    if not patch:
+                        self._json_response({"error": "Keine gültigen Felder"}, 400)
+                    else:
+                        ok = planets_store.update_planet(city_id, patch)
+                        logger.info("Planet %d Einstellungen via Dashboard: %s", city_id, patch)
+                        self._json_response({"ok": ok, "city_id": city_id})
+                else:
+                    self.send_error(404, "Not Found")
             else:
                 self.send_error(404, "Not Found")
         except Exception as e:
@@ -462,6 +482,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "current_city_id": ts.get_current_city_id(),
                     "colonies": sorted(snapshots.values(), key=lambda c: c.get("city_id", 0)),
                 })
+            elif path == "/api/planets":
+                self._json_response({"planets": planets_store.get_all()})
             else:
                 self.send_error(404, "Not Found")
         except Exception as e:

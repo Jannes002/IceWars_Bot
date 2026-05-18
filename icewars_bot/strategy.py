@@ -590,7 +590,7 @@ class Strategy:
     #  Hauptentscheidung
     # ──────────────────────────────────────────────────────────────────────
 
-    def decide(self, state: GameState) -> list[Action]:
+    def decide(self, state: GameState, priority_override: Optional[str] = None) -> list[Action]:
         actions: list[Action] = []
 
         self._log_overview(state)
@@ -598,7 +598,7 @@ class Strategy:
         free_slots = state.max_build_slots - len(state.build_queue)
 
         if free_slots > 0:
-            build_action = self._decide_build(state)
+            build_action = self._decide_build(state, priority_override=priority_override)
             if build_action:
                 actions.append(build_action)
         else:
@@ -622,7 +622,7 @@ class Strategy:
     #  Bau-Priorisierung
     # ──────────────────────────────────────────────────────────────────────
 
-    def _decide_build(self, state: GameState) -> Optional[Action]:
+    def _decide_build(self, state: GameState, priority_override: Optional[str] = None) -> Optional[Action]:
         """Entscheidet was gebaut wird — in Prioritätsreihenfolge."""
 
         # Ziele live aus goals.py einlesen
@@ -664,7 +664,7 @@ class Strategy:
             return bunker_action
 
         # 6) Normaler Gebäudebau — beste Ressourcenproduktion steigern
-        action = self._build_best_growth(state)
+        action = self._build_best_growth(state, priority_override=priority_override)
         if action:
             return action
 
@@ -675,10 +675,10 @@ class Strategy:
         )
         return Action("build_next_building", {"aggression": self._config.strategy.aggression})
 
-    def _build_best_growth(self, state: GameState) -> Optional[Action]:
+    def _build_best_growth(self, state: GameState, priority_override: Optional[str] = None) -> Optional[Action]:
         """Wählt im Normalfall das Gebäude mit der höchsten Effizienz aus.
 
-        Berücksichtigt priority_resource aus den Zielen:
+        Berücksichtigt priority_resource aus den Zielen (oder planet-spezifischen Override):
         - "balanced" → 3 schwächste Ressourcen vergleichen (Standardverhalten)
         - "iron"/"fp"/… → nur Gebäude für diese Ressource suchen
 
@@ -689,7 +689,8 @@ class Strategy:
         if not state.buildings:
             return None
 
-        priority = G.priority_resource()
+        # Planet-spezifische Priorität hat Vorrang, sonst globale Einstellung
+        priority = priority_override if priority_override is not None else G.priority_resource()
 
         # Wenn die gewählte Priorität pausiert ist, fällt der Modus auf
         # "balanced" zurück — sonst würde der Bot gar nichts mehr bauen.

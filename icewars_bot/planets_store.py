@@ -27,9 +27,21 @@ logger = logging.getLogger(__name__)
 
 PLANETS_PATH = Path("data/planets.json")
 _BACKUP_PATH  = Path("data/planets.json.bak")
-_PERSIST_KEYS = {"id", "name", "coords", "planet_type", "_last_visited"}
-
 _lock = threading.Lock()
+
+# Felder die dauerhaft gespeichert werden (pro Planet)
+_PERSIST_KEYS = {
+    "id", "name", "coords", "planet_type", "_last_visited",
+    "paused", "priority_resource", "auto_donate", "donate_threshold",
+}
+
+# Standardwerte für neue Planet-Einstellungsfelder
+_PLANET_SETTING_DEFAULTS: dict = {
+    "paused": False,
+    "priority_resource": None,   # None = globale Einstellung verwenden
+    "auto_donate": False,
+    "donate_threshold": 0.95,
+}
 
 
 # ── Interne Helfer ────────────────────────────────────────────────────────────
@@ -140,15 +152,32 @@ def load() -> tuple[list[dict], set[int]]:
 def save(planet_cities: list[dict]) -> None:
     """Speichert die aktuelle Planetenliste (nur persistente Felder).
 
+    Liest vorhandene Daten zuerst ein und mergt sie, damit Dashboard-Einstellungen
+    (paused, priority_resource, auto_donate, donate_threshold) nicht überschrieben
+    werden, wenn der Bot die Laufzeitdaten (_last_visited etc.) abspeichert.
     Schreibt atomar — die Datei ist niemals in einem Zwischenzustand.
     """
     with _lock:
         data = _load_raw()
-        data["known"] = [
-            {k: v for k, v in p.items() if k in _PERSIST_KEYS}
-            for p in planet_cities
-            if p.get("id")
-        ]
+        # Index bestehender Planetendaten aufbauen (enthält evtl. Dashboard-Einstellungen)
+        stored_by_id: dict[int, dict] = {
+            p.get("id"): p for p in data.get("known", []) if p.get("id")
+        }
+        known = []
+        for p in planet_cities:
+            if not p.get("id"):
+                continue
+            city_id = p["id"]
+            # Basis: gespeicherte Daten (bewahrt Dashboard-Einstellungen)
+            merged = dict(stored_by_id.get(city_id, {}))
+            # Aktuell bekannte Felder überschreiben (name, coords, _last_visited …)
+            for k, v in p.items():
+                if k in _PERSIST_KEYS:
+                    merged[k] = v
+            # Sicherstellen, dass id immer vorhanden ist
+            merged["id"] = city_id
+            known.append(merged)
+        data["known"] = known
         _save_raw(data)
         logger.debug("Planeten gespeichert: %d Einträge", len(data["known"]))
 
@@ -166,6 +195,46 @@ def remove(city_id: int) -> None:
 
 
 def get_all() -> list[dict]:
-    """Gibt alle bekannten Planeten zurück (nur für Dashboard-Nutzung)."""
+    """Gibt alle bekannten Planeten zurück (mit persönlichen Einstellungen)."""
     with _lock:
-        return _load_raw().get("known", [])
+        planets = _load_raw().get("known", [])
+        # Fehlende Einstellungsfelder mit Defaults auffüllen
+        result = []
+        for p in planets:
+            entry = dict(_PLANET_SETTING_DEFAULTS)
+            entry.update(p)
+            result.append(entry)
+        return result
+
+
+def get_planet(city_id: int) -> dict | None:
+    """Gibt einen einzelnen Planeten mit seinen Einstellungen zurück, oder None."""
+    for p in get_all():
+        if p.get("id") == city_id:
+            return p
+    return None
+
+
+def update_planet(city_id: int, patch: dict) -> bool:
+    """Aktualisiert Einstellungsfelder eines Planeten.
+
+    Nur Felder aus ``_PLANET_SETTING_DEFAULTS`` sind erlaubt.
+    Gibt True zurück wenn der Planet gefunden und gespeichert wurde.
+    """
+    allowed = set(_PLANET_SETTING_DEFAULTS.keys())
+    filtered = {k: v for k, v in patch.items() if k in allowed}
+    if not filtered:
+        return False
+    with _lock:
+        data = _load_raw()
+        found = False
+        for p in data.get("known", []):
+            if p.get("id") == city_id:
+                p.update(filtered)
+                found = True
+                break
+        if not found:
+            return False
+        _save_raw(data)
+        logger.info("Planet %d Einstellungen aktualisiert: %s", city_id, filtered)
+        return True

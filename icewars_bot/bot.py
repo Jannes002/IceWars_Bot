@@ -1157,6 +1157,59 @@ class BotLoop:
         else:
             await self._notify_if("notify_donation", f"⚠️ <b>Spende fehlgeschlagen</b>\n{summary}")
 
+    async def _auto_donate_if_needed(self, state: GameState) -> None:
+        """Führt automatische Allianz-Spenden aus wenn für den aktuellen Planeten aktiviert.
+
+        Liest ``auto_donate`` und ``donate_threshold`` aus den Planet-Einstellungen.
+        Spendet 10 % des Bestands für jede Ressource die den Schwellwert überschreitet,
+        sofern der Bestand >= der globalen Mindestmenge (``donate_min_amounts``) ist.
+        Nutzt ``_donated_resources`` zur Deduplication (verhindert Spende jede Runde).
+        """
+        planet = self._get_current_planet()
+        if not planet or not planet.get("auto_donate", False):
+            return
+
+        threshold = float(planet.get("donate_threshold") or self._RES_HIGH_THRESHOLD)
+        min_amounts = G.donate_min_amounts()
+
+        donations: dict[str, int] = {}
+        for res in ("iron", "steel", "chemicals", "ice", "water", "energy", "vv4a"):
+            ratio = state.capacity.fill_ratio(res, state.resources)
+            if ratio <= 0 or ratio < threshold:
+                continue
+            if res in self._donated_resources:
+                continue
+            current_val = int(getattr(state.resources, res, 0))
+            if current_val < float(min_amounts.get(res, 0)):
+                continue
+            donate_amount = int(current_val * self._RES_DONATE_FRACTION)
+            if donate_amount <= 0:
+                continue
+            donations[res] = donate_amount
+            self._donated_resources.add(res)
+
+        if not donations:
+            return
+
+        planet_name = planet.get("name", str(state.city_id))
+        logger.info("Auto-Spende (%s): %s", planet_name, donations)
+        success = await self._executor.donate_to_alliance(donations)
+
+        details = "\n".join(
+            f"  {self._MONITORED_RESOURCES.get(r, r)}: {a:,}"
+            for r, a in donations.items()
+        )
+        if success:
+            record_activity("bot_action", f"Auto-Spende ({planet_name})", details)
+            await self._notify_if(
+                "notify_donation",
+                f"🤝 <b>Auto-Spende: {planet_name}</b>\n{details}"
+            )
+        else:
+            logger.warning("Auto-Spende fehlgeschlagen: %s", donations)
+            for res in donations:
+                self._donated_resources.discard(res)
+
     # ── Telegram: Priorität setzen ──────────────────────────────────────
 
     _PRIORITY_LABELS: dict[str, str] = {
@@ -1223,6 +1276,16 @@ class BotLoop:
             "/priorität [res] — Produktions-Priorität anzeigen/setzen\n"
             "/hilfe — Diese Hilfe anzeigen"
         )
+
+    def _get_current_planet(self) -> Optional[dict]:
+        """Gibt die aktuellen Planetdaten (inkl. Dashboard-Einstellungen) frisch von Disk zurück."""
+        if not self._planet_cities:
+            return None
+        if 0 <= self._current_city_idx < len(self._planet_cities):
+            city_id = self._planet_cities[self._current_city_idx].get("id")
+            if city_id:
+                return planets_store.get_planet(city_id)
+        return None
 
     def _process_planet_removals(self) -> None:
         """Verarbeitet Planet-Entfernungsanfragen vom Dashboard."""
@@ -1320,13 +1383,34 @@ class BotLoop:
             await self._execute_requested_action_if_pending()
             await self._execute_donate_request_if_pending()
 
-            # Wenn Bot pausiert: keine Entscheidungen treffen, nur protokollieren
+            # Wenn Bot global pausiert: keine Entscheidungen treffen, nur protokollieren
             if ts.is_paused():
                 logger.info("Bot pausiert — Runde %d übersprungen.", self._stats.turns_completed + 1)
                 self._stats.turns_completed += 1
                 return
 
-            actions = self._strategy.decide(state)
+            # Planet-spezifische Einstellungen (frisch von Disk lesen)
+            current_planet    = self._get_current_planet()
+            planet_paused     = bool((current_planet or {}).get("paused", False))
+            planet_priority   = (current_planet or {}).get("priority_resource") or None
+
+            # Auto-Spende (planet-spezifisch, läuft auch wenn Planet pausiert ist)
+            await self._auto_donate_if_needed(state)
+
+            if planet_paused:
+                planet_name = (current_planet or {}).get("name", str(state.city_id))
+                logger.info(
+                    "Planet '%s' pausiert — kein Auto-Build/Forschung (Runde %d).",
+                    planet_name, self._stats.turns_completed + 1,
+                )
+                ts.set_recommended_action(None)
+                ts.update_planned([])
+                self._stats.turns_completed += 1
+                self._consecutive_failures = 0
+                self._update_next_switch_info()
+                return
+
+            actions = self._strategy.decide(state, priority_override=planet_priority)
             ts.update_planned([_action_to_task(a) for a in actions])
 
             # Scoring-Transparenz: sortierte Liste aller baubaren Gebäude für Dashboard

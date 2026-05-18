@@ -73,6 +73,19 @@ DEFAULTS: dict[str, Any] = {
     "notify_browser_restart":   True,   # ⚠️ Browser-Neustart / Bot-Fehler
     "notify_donation":          True,   # 🤝 Allianz-Spende
 
+    # Auto-Spende: Mindestmenge je Ressource ab der eine Spende ausgelöst wird.
+    # Der Bot spendet nur, wenn der aktuelle Bestand >= diesem Wert ist.
+    # 0 = kein Minimum (immer spenden wenn der Füllstand-Schwellwert erreicht ist).
+    "donate_min_amounts": {
+        "iron":      0,
+        "steel":     0,
+        "chemicals": 0,
+        "ice":       0,
+        "water":     0,
+        "energy":    0,
+        "vv4a":      0,
+    },
+
     # Mindest-Ressourcenmengen (Display-Ziele im Dashboard, keine Bot-Logik)
     "resource_targets": {
         "iron":      0.0,
@@ -101,8 +114,9 @@ def _load_from_disk() -> dict[str, Any]:
         # Defaults als Basis, gespeicherte Werte überschreiben
         merged = dict(DEFAULTS)
         merged.update(stored)
-        merged["resource_targets"] = {**DEFAULTS["resource_targets"], **stored.get("resource_targets", {})}
+        merged["resource_targets"]  = {**DEFAULTS["resource_targets"],  **stored.get("resource_targets",  {})}
         merged["bunker_thresholds"] = {**DEFAULTS["bunker_thresholds"], **stored.get("bunker_thresholds", {})}
+        merged["donate_min_amounts"] = {**DEFAULTS["donate_min_amounts"], **stored.get("donate_min_amounts", {})}
         return merged
     except Exception as e:
         logger.error("goals.json Ladefehler: %s — nutze Defaults.", e)
@@ -146,6 +160,9 @@ def update(patch: dict[str, Any]) -> dict[str, Any]:
         if "bunker_thresholds" in patch and isinstance(patch["bunker_thresholds"], dict):
             _goals["bunker_thresholds"].update(patch["bunker_thresholds"])
             patch = {k: v for k, v in patch.items() if k != "bunker_thresholds"}
+        if "donate_min_amounts" in patch and isinstance(patch["donate_min_amounts"], dict):
+            _goals["donate_min_amounts"].update(patch["donate_min_amounts"])
+            patch = {k: v for k, v in patch.items() if k != "donate_min_amounts"}
         _goals.update(patch)
         _save_to_disk(_goals)
         logger.info("Ziele aktualisiert und gespeichert.")
@@ -220,6 +237,17 @@ def bunker_thresholds() -> dict[str, float]:
     """Bunker-Schwellwerte pro Ressource (0.0 = deaktiviert)."""
     raw = get().get("bunker_thresholds", DEFAULTS["bunker_thresholds"])
     result = dict(DEFAULTS["bunker_thresholds"])
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if k in result:
+                result[k] = float(v)
+    return result
+
+
+def donate_min_amounts() -> dict[str, float]:
+    """Mindestmengen je Ressource ab denen eine Auto-Spende ausgelöst wird (0 = kein Minimum)."""
+    raw = get().get("donate_min_amounts", DEFAULTS["donate_min_amounts"])
+    result = dict(DEFAULTS["donate_min_amounts"])
     if isinstance(raw, dict):
         for k, v in raw.items():
             if k in result:

@@ -479,6 +479,71 @@
       transition: all .15s; cursor: pointer; flex-shrink: 0;
     }
     .planet-chip:hover { border-color: var(--border-light); color: var(--text); }
+    /* ── Planet-Einstellungen (in jeder Planet-Karte) ───────────────── */
+    .planet-settings {
+      border-top: 1px solid var(--border);
+      padding: 10px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .planet-setting-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: .79rem;
+      color: var(--text-muted);
+    }
+    .planet-setting-row > span:first-child { flex: 1; min-width: 90px; }
+    .planet-setting-select {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: var(--radius-sm);
+      padding: 3px 6px;
+      font-size: .78rem;
+    }
+    .planet-setting-input {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: var(--radius-sm);
+      padding: 3px 6px;
+      font-size: .78rem;
+      width: 62px;
+      text-align: right;
+    }
+    .toggle-sm {
+      position: relative; width: 32px; height: 18px; flex-shrink: 0;
+    }
+    .toggle-sm input { opacity: 0; width: 0; height: 0; }
+    .toggle-sm .toggle-slider {
+      position: absolute; inset: 0;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-light);
+      border-radius: 9px; cursor: pointer;
+      transition: all .2s;
+    }
+    .toggle-sm .toggle-slider::before {
+      content: '';
+      position: absolute; width: 12px; height: 12px;
+      left: 2px; top: 2px; border-radius: 50%;
+      background: var(--text-dim);
+      transition: all .2s;
+    }
+    .toggle-sm input:checked + .toggle-slider { background: var(--accent); border-color: var(--accent); }
+    .toggle-sm input:checked + .toggle-slider::before { transform: translateX(14px); background: #000; }
+    .planet-paused-badge {
+      font-size: .68rem;
+      background: var(--amber-dim);
+      color: var(--amber);
+      border: 1px solid rgba(245,158,11,.4);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-weight: 600;
+      margin-left: 4px;
+    }
+
     .planet-chip.active {
       border-color: var(--accent); color: var(--accent);
       background: var(--accent-dim);
@@ -1054,6 +1119,54 @@
         </div>
       </div>
 
+      <!-- Auto-Spende: Mindestmengen -->
+      <div class="settings-section" id="sec-donate-min">
+        <div class="settings-section-header" onclick="toggleSection('sec-donate-min')">
+          <span class="settings-section-title">
+            <span class="settings-section-icon">🤝</span> Auto-Spende: Mindestmengen
+          </span>
+          <span class="settings-chevron">▼</span>
+        </div>
+        <div class="settings-body">
+          <p class="form-hint" style="margin-bottom:12px">
+            Mindestmenge je Ressource ab der eine automatische Spende ausgelöst wird.
+            Der Bot spendet nur wenn der aktuelle Bestand diesen Wert erreicht oder überschreitet.
+            0 = kein Minimum (immer spenden wenn der Füllstand-Schwellwert erreicht ist).
+          </p>
+          <div class="form-row">
+            <label>⛏ Eisen — Mindestmenge</label>
+            <input type="number" id="donate-min-iron" min="0" step="1000" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>🔩 Stahl — Mindestmenge</label>
+            <input type="number" id="donate-min-steel" min="0" step="1000" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>🧪 Chemikalien — Mindestmenge</label>
+            <input type="number" id="donate-min-chemicals" min="0" step="1000" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>🧊 Eis — Mindestmenge</label>
+            <input type="number" id="donate-min-ice" min="0" step="1000" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>💧 Wasser — Mindestmenge</label>
+            <input type="number" id="donate-min-water" min="0" step="1000" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>⚡ Energie — Mindestmenge</label>
+            <input type="number" id="donate-min-energy" min="0" step="1000" placeholder="0">
+          </div>
+          <div class="form-row">
+            <label>💎 VV4A — Mindestmenge</label>
+            <input type="number" id="donate-min-vv4a" min="0" step="1000" placeholder="0">
+          </div>
+          <div class="row mt-12">
+            <button class="btn btn-primary" onclick="saveDonateMinAmounts()">Speichern</button>
+          </div>
+        </div>
+      </div>
+
     </div><!-- /stack -->
   </section><!-- /tab-settings -->
 
@@ -1572,30 +1685,65 @@ function activeTab() {
 /* ── Planets ───────────────────────────────────────────────────────── */
 async function loadPlanets() {
   try {
-    const data = await api('/api/colonies');
+    const [coloniesData, planetsData] = await Promise.all([
+      api('/api/colonies'),
+      api('/api/planets'),
+    ]);
+    // Einstellungs-Index aufbauen: city_id → planet settings
+    _planetSettings = {};
+    for (const p of (planetsData.planets || [])) {
+      _planetSettings[p.id] = p;
+    }
     const grid = document.getElementById('planet-grid');
-    const cols = data.colonies || [];
+    const cols = coloniesData.colonies || [];
     if (!cols.length) {
       grid.innerHTML = '<div class="text-muted text-sm" style="padding:20px">Noch keine Planetendaten.</div>';
       return;
     }
-    grid.innerHTML = cols.map(c => planetCard(c, data.current_city_id)).join('');
+    grid.innerHTML = cols.map(c => planetCard(c, coloniesData.current_city_id, _planetSettings[c.city_id] || {})).join('');
   } catch(e) {}
 }
 
-function planetCard(c, activeId) {
+let _planetSettings = {};
+
+async function savePlanetSetting(cityId, key, value) {
+  try {
+    await api(`/api/planets/${cityId}/settings`, 'POST', { [key]: value });
+    if (_planetSettings[cityId]) _planetSettings[cityId][key] = value;
+    toast('Gespeichert');
+  } catch(e) { toast('Fehler beim Speichern', 'error'); }
+}
+
+function togglePlanetAutoDonate(cityId, checkbox) {
+  const row = document.getElementById('donate-thresh-row-' + cityId);
+  if (row) row.style.display = checkbox.checked ? '' : 'none';
+  savePlanetSetting(cityId, 'auto_donate', checkbox.checked);
+}
+
+function planetCard(c, activeId, settings) {
   const isActive = c.city_id === activeId;
   const res = c.resources || {};
-  const cap = c.capacity || {};
   const fill = c.fill || {};
-  const rates = c.rates || {};
   const mainRes = ['iron','steel','ice','energy','vv4a'];
   const queue = c.build_queue || [];
+  const s = settings || {};
+  const isPaused = !!s.paused;
+  const prio = s.priority_resource || '';
+  const autoDonate = !!s.auto_donate;
+  const donateThresh = Math.round((s.donate_threshold != null ? s.donate_threshold : 0.95) * 100);
+
+  const prioOptions = [
+    ['','⚖️ Global (Standard)'],
+    ['balanced','⚖️ Ausgewogen'],
+    ['iron','⛏ Eisen'],['steel','🔩 Stahl'],['chemicals','🧪 Chemikalien'],
+    ['ice','🧊 Eis'],['water','💧 Wasser'],['energy','⚡ Energie'],
+    ['vv4a','💎 VV4A'],['fp','🔬 Forschung'],['credits','💰 Credits'],
+  ].map(([v,l]) => `<option value="${v}" ${prio===v?'selected':''}>${l}</option>`).join('');
 
   return `<div class="planet-card ${isActive ? 'active-planet' : ''}">
     <div class="planet-header">
       <div>
-        <div class="planet-name">${esc(c.city_name || 'Planet ' + c.city_id)}</div>
+        <div class="planet-name">${esc(c.city_name || 'Planet ' + c.city_id)}${isPaused ? '<span class="planet-paused-badge">⏸ Pausiert</span>' : ''}</div>
         <div class="planet-coords">${esc(c.coords || '')} ${c.planet_type ? '· ' + esc(c.planet_type) : ''}</div>
       </div>
       <div style="display:flex;gap:6px;align-items:center">
@@ -1622,6 +1770,38 @@ function planetCard(c, activeId) {
         <span>👥 ${fmtNum(c.population_free)} frei</span>
         <span>😊 ${c.satisfaction != null ? fmtPct(c.satisfaction) : '—'}</span>
         <span class="bold" style="color:var(--text)">${fmtNum(c.points)} Pkt.</span>
+      </div>
+    </div>
+    <div class="planet-settings">
+      <div class="planet-setting-row">
+        <span>⏸ Bot pausieren</span>
+        <label class="toggle-sm">
+          <input type="checkbox" ${isPaused ? 'checked' : ''}
+                 onchange="savePlanetSetting(${c.city_id}, 'paused', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="planet-setting-row">
+        <span>🎯 Priorität</span>
+        <select class="planet-setting-select"
+                onchange="savePlanetSetting(${c.city_id}, 'priority_resource', this.value || null)">
+          ${prioOptions}
+        </select>
+      </div>
+      <div class="planet-setting-row">
+        <span>🤝 Auto-Spende</span>
+        <label class="toggle-sm">
+          <input type="checkbox" ${autoDonate ? 'checked' : ''}
+                 onchange="togglePlanetAutoDonate(${c.city_id}, this)">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="planet-setting-row" id="donate-thresh-row-${c.city_id}" style="${autoDonate ? '' : 'display:none'}">
+        <span style="padding-left:12px;color:var(--text-dim)">↳ Spende ab</span>
+        <input type="number" class="planet-setting-input" min="50" max="99" step="1"
+               value="${donateThresh}"
+               onchange="savePlanetSetting(${c.city_id}, 'donate_threshold', parseFloat(this.value)/100)">
+        <span>%</span>
       </div>
     </div>
   </div>`;
@@ -1684,6 +1864,12 @@ function applyGoalsToForm(g) {
   setVal('notif-research-complete', g.notify_research_complete !== false);
   setVal('notif-browser-restart',   g.notify_browser_restart   !== false);
   setVal('notif-donation',          g.notify_donation          !== false);
+  // Donate-Mindestmengen
+  const dm = g.donate_min_amounts || {};
+  const donateRes = ['iron','steel','chemicals','ice','water','energy','vv4a'];
+  for (const r of donateRes) {
+    setVal('donate-min-' + r, dm[r] != null ? dm[r] : 0);
+  }
 }
 
 function setVal(id, val) {
@@ -1792,6 +1978,19 @@ async function saveBunkerThresholds() {
   } catch(e) { toast('Fehler beim Speichern', 'error'); }
 }
 
+async function saveDonateMinAmounts() {
+  const donateRes = ['iron','steel','chemicals','ice','water','energy','vv4a'];
+  const amounts = {};
+  for (const r of donateRes) {
+    const el = document.getElementById('donate-min-' + r);
+    amounts[r] = el ? parseFloat(el.value) || 0 : 0;
+  }
+  try {
+    await api('/api/goals', 'POST', { donate_min_amounts: amounts });
+    toast('Mindestmengen gespeichert');
+  } catch(e) { toast('Fehler beim Speichern', 'error'); }
+}
+
 async function resetGoals() {
   if (!confirm('Alle Ziele auf Standardwerte zurücksetzen?')) return;
   try {
@@ -1801,6 +2000,7 @@ async function resetGoals() {
     toast('Ziele zurückgesetzt');
   } catch(e) { toast('Fehler', 'error'); }
 }
+
 
 async function saveCredentials() {
   const body = {};
