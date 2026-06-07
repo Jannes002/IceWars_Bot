@@ -35,6 +35,9 @@ _PERSIST_KEYS = {
     "paused", "priority_resource", "auto_donate", "donate_threshold",
 }
 
+# Felder die der Bot zur Laufzeit schreibt (save() darf diese überschreiben)
+_RUNTIME_KEYS = {"id", "name", "coords", "planet_type", "_last_visited"}
+
 # Standardwerte für neue Planet-Einstellungsfelder
 _PLANET_SETTING_DEFAULTS: dict = {
     "paused": False,
@@ -42,6 +45,9 @@ _PLANET_SETTING_DEFAULTS: dict = {
     "auto_donate": False,
     "donate_threshold": 0.95,
 }
+
+# Felder die NUR über update_planet() geändert werden dürfen
+_SETTINGS_KEYS = set(_PLANET_SETTING_DEFAULTS.keys())
 
 
 # ── Interne Helfer ────────────────────────────────────────────────────────────
@@ -168,11 +174,14 @@ def save(planet_cities: list[dict]) -> None:
             if not p.get("id"):
                 continue
             city_id = p["id"]
-            # Basis: gespeicherte Daten (bewahrt Dashboard-Einstellungen)
+            # Basis: gespeicherte Daten (bewahrt Dashboard-Einstellungen wie paused etc.)
             merged = dict(stored_by_id.get(city_id, {}))
-            # Aktuell bekannte Felder überschreiben (name, coords, _last_visited …)
+            # Nur Laufzeit-Felder aus dem In-Memory-Dict überschreiben.
+            # Settings-Felder (paused, priority_resource, …) werden NICHT
+            # aus dem In-Memory-Dict gelesen — sie liegen korrekt auf Disk
+            # und dürfen nur via update_planet() geändert werden.
             for k, v in p.items():
-                if k in _PERSIST_KEYS:
+                if k in _RUNTIME_KEYS:
                     merged[k] = v
             # Sicherstellen, dass id immer vorhanden ist
             merged["id"] = city_id
