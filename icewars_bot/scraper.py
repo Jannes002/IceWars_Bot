@@ -398,15 +398,48 @@ _SHIP_VIEW_JS = r"""
 
         const rowText = (row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim();
 
-        // Name: Klassen-Selektoren, dann strong/b, dann ersten Textblock
+        // Aktions-Wörter die als Name NICHT in Frage kommen
+        const ACTION_WORDS = /^(Bauen|Build|Bau|Start|Starten|Kaufen|Buy|Ok|Bestätigen|Confirm|Weiter|Next|Abbrechen|Cancel|x|\+|-|>|<)$/i;
+
+        // Name ermitteln — Buttons und reine Aktions-Texte überspringen
         let name = '';
-        const nameEl = row.querySelector(
-            '.ship-name, .sname, .shipname, [class*="name"], td:first-child, th:first-child, strong, b, h3, h4'
-        );
-        if (nameEl) name = (nameEl.innerText || nameEl.textContent || '').trim().split('\n')[0].trim();
-        // Fallback: Text vor erstem Doppelpunkt / Zahl
-        if (!name || name.length > 80) name = rowText.split(/[:|\d]/)[0].trim().slice(0, 60);
-        if (!name) name = stype;
+
+        // 1. Explizite Name-Selektoren (ohne Buttons)
+        const nameSelectors = ['.ship-name','.sname','.shipname','[class*="ship-title"]','[class*="ship-label"]'];
+        for (const sel of nameSelectors) {
+            const el = row.querySelector(sel);
+            if (el) { name = (el.innerText || el.textContent || '').trim().split('\n')[0].trim(); break; }
+        }
+
+        // 2. Alle Text-Knoten der Zeile — ersten sinnvollen nehmen (kein Button, kein Aktions-Wort)
+        if (!name || ACTION_WORDS.test(name)) {
+            const candidates = [...row.querySelectorAll('td, th, span, label, div, strong, b, h3, h4, p')]
+                .filter(el => {
+                    // Elemente die selbst ein Button sind oder einen enthalten überspringen
+                    if (el.tagName === 'BUTTON') return false;
+                    if (el.querySelector('button')) return false;
+                    const t = (el.innerText || el.textContent || '').trim().split('\n')[0].trim();
+                    // Zahlen, leere Strings und Aktions-Wörter überspringen
+                    if (!t || /^\d+$/.test(t) || ACTION_WORDS.test(t)) return false;
+                    if (t.length > 80 || t.length < 2) return false;
+                    return true;
+                });
+            if (candidates.length > 0) {
+                name = (candidates[0].innerText || candidates[0].textContent || '').trim().split('\n')[0].trim();
+            }
+        }
+
+        // 3. Fallback: rowText vor erster Zahl / Sonderzeichen, ohne Aktions-Wörter
+        if (!name || ACTION_WORDS.test(name)) {
+            const parts = rowText.split(/[\d|:·]/);
+            for (const p of parts) {
+                const t = p.trim();
+                if (t && !ACTION_WORDS.test(t) && t.length >= 2 && t.length <= 60) { name = t; break; }
+            }
+        }
+
+        // 4. Letzter Fallback: Typ-String
+        if (!name || ACTION_WORDS.test(name)) name = stype;
 
         // Ressourcenkosten aus rowText
         const cost = {};

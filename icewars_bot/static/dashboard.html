@@ -2181,15 +2181,24 @@ function renderShipTargets(unlockedShips, targets) {
     return;
   }
 
+  // Aktions-Wörter die kein richtiger Schiffsname sind (Scraper-Fallback)
+  const _ACTION_WORDS = /^(Bauen|Build|Bau|Start|Starten|Kaufen|Buy|Ok|Bestätigen|Confirm|Weiter|Next)$/i;
+  function shipDisplayName(ship) {
+    const n = ship.name || '';
+    if (!n || _ACTION_WORDS.test(n.trim())) return ship.type;  // Typ als Fallback
+    return n;
+  }
+
   const rows = allShips.map(ship => {
     const target = targets[ship.type] || 0;
+    const displayName = shipDisplayName(ship);
     return `<div class="ship-target-row">
-      <span class="ship-name-label">🚀 ${esc(ship.name || ship.type)}</span>
+      <span class="ship-name-label">🚀 ${esc(displayName)}</span>
       <span class="ship-type-badge">${esc(ship.type)}</span>
       <div style="display:flex;align-items:center;gap:6px">
         <input type="number" class="ship-target-input" id="ship-target-${esc(ship.type)}"
                min="0" step="1" value="${target}" placeholder="0"
-               data-ship-type="${esc(ship.type)}" data-ship-name="${esc(ship.name || ship.type)}">
+               data-ship-type="${esc(ship.type)}" data-ship-name="${esc(displayName)}">
         <span class="text-muted text-sm">Gesamt</span>
       </div>
     </div>`;
@@ -2295,7 +2304,7 @@ function renderFleetTotal(fleetPlanets, unlockedShips, targets) {
     const barColor = pct === null ? 'var(--accent)' : pct >= 100 ? 'var(--green)' : pct >= 50 ? 'var(--amber)' : 'var(--red)';
 
     return `<div class="fleet-total-row">
-      <div class="fleet-total-name">🚀 ${esc(t.name)}</div>
+      <div class="fleet-total-name">🚀 ${esc((!t.name || _ACTION_WORDS.test(t.name.trim())) ? stype : t.name)}</div>
       <div class="fleet-total-counts">
         <span style="color:var(--text);font-weight:600">${t.count}</span>
         ${t.in_queue > 0 ? `<span style="color:var(--amber);font-size:0.8rem"> +${t.in_queue} im Bau</span>` : ''}

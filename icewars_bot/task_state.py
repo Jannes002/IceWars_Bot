@@ -439,18 +439,38 @@ def get_fleet_snapshots() -> dict:
         return dict(_state.fleet_snapshots)
 
 
+_ACTION_WORDS = frozenset({
+    "bauen", "build", "bau", "start", "starten", "kaufen", "buy",
+    "ok", "bestätigen", "confirm", "weiter", "next", "abbrechen", "cancel",
+})
+
+def _is_action_word(name: str) -> bool:
+    return (name or "").strip().lower() in _ACTION_WORDS
+
+
 def update_unlocked_ships(ships: list) -> None:
     """Aktualisiert die Liste bekannter Schiffstypen (type+name).
 
-    Neue Einträge werden hinzugefügt, vorhandene (gleicher type) aktualisiert.
+    Neue Einträge werden hinzugefügt, vorhandene (gleicher type) nur dann
+    überschrieben wenn der neue Name besser ist (kein Aktions-Wort wie 'Bauen').
     ships: [{"type": str, "name": str}, ...]
     """
     with _lock:
         known: dict[str, dict] = {s["type"]: s for s in _state.unlocked_ships if s.get("type")}
         for s in ships:
             stype = s.get("type")
-            if stype:
-                known[stype] = {"type": stype, "name": s.get("name", stype)}
+            if not stype:
+                continue
+            new_name = s.get("name", stype)
+            existing = known.get(stype)
+            if existing is None:
+                # Neu: aufnehmen, ggf. Typ als Name wenn Aktions-Wort
+                known[stype] = {"type": stype, "name": stype if _is_action_word(new_name) else new_name}
+            else:
+                old_name = existing.get("name", "")
+                # Vorhandenen Namen nur ersetzen wenn neuer Name besser ist
+                if not _is_action_word(new_name) and (not old_name or _is_action_word(old_name)):
+                    known[stype] = {"type": stype, "name": new_name}
         _state.unlocked_ships = list(known.values())
 
 
