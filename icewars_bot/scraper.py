@@ -295,76 +295,120 @@ _SHIP_VIEW_JS = r"""
 () => {
     function parseNumber(s) {
         if (!s) return 0;
-        const cleaned = String(s).replace(/[^\d.,-]/g, '').replace(/[.,](?=\d{3}\b)/g, '');
-        const n = parseFloat(cleaned.replace(',', '.'));
+        // Tausendertrennzeichen entfernen: "1.234" oder "1,234" → 1234
+        // Dezimalkomma: "1234,5" → 1234.5
+        let c = String(s).replace(/[^\d.,]/g, '');
+        // Wenn Punkt UND Komma vorhanden: Punkt = Tausender, Komma = Dez.
+        if (c.includes('.') && c.includes(',')) {
+            c = c.replace(/\./g, '').replace(',', '.');
+        } else {
+            // Nur Komma → deutsches Dezimalformat
+            c = c.replace(',', '.');
+        }
+        const n = parseFloat(c);
         return isNaN(n) ? 0 : n;
     }
 
     function parseTime(text) {
         if (!text) return 0;
-        let sec = 0;
-        const hms = text.match(/(\d+)\s*h\s*(\d+)\s*m(?:\s*(\d+)\s*s)?/i);
+        const hms = text.match(/(\d+)\s*[hH]\s*(\d+)\s*[mM](?:\s*(\d+)\s*[sS])?/);
         if (hms) return parseInt(hms[1])*3600 + parseInt(hms[2])*60 + parseInt(hms[3]||'0');
-        const ms = text.match(/(\d+)\s*m(?:in)?\s*(\d+)?\s*s?/i);
+        const ms = text.match(/(\d+)\s*[mM][inIN]*\s*(\d+)?\s*[sS]?/);
         if (ms) return parseInt(ms[1])*60 + parseInt(ms[2]||'0');
-        const colon = text.match(/(\d+):(\d{2}):(\d{2})/);
-        if (colon) return parseInt(colon[1])*3600 + parseInt(colon[2])*60 + parseInt(colon[3]);
-        const onlySec = text.match(/(\d+)\s*s\b/i);
+        const colon3 = text.match(/(\d+):(\d{2}):(\d{2})/);
+        if (colon3) return parseInt(colon3[1])*3600 + parseInt(colon3[2])*60 + parseInt(colon3[3]);
+        const colon2 = text.match(/(\d+):(\d{2})/);
+        if (colon2) return parseInt(colon2[1])*60 + parseInt(colon2[2]);
+        const onlySec = text.match(/(\d+)\s*[sS]\b/);
         if (onlySec) return parseInt(onlySec[1]);
         return 0;
     }
 
+    // Ressourcennamen: DE + EN
     const costKeys = [
-        ['iron',      /\bEisen\b/i],
-        ['steel',     /\bStahl\b/i],
-        ['chemicals', /\bChem/i],
-        ['ice',       /\bEis\b/i],
-        ['water',     /\bWasser\b/i],
-        ['energy',    /\bEnergie\b/i],
-        ['vv4a',      /\bVV4A\b/i],
-        ['credits',   /\bCredits?\b/i],
+        ['iron',      /\b(Eisen|Iron)\b/i],
+        ['steel',     /\b(Stahl|Steel)\b/i],
+        ['chemicals', /\b(Chemik|Chem|Chemical)/i],
+        ['ice',       /\b(Eis|Ice)\b/i],
+        ['water',     /\b(Wasser|Water)\b/i],
+        ['energy',    /\b(Energie|Energy)\b/i],
+        ['vv4a',      /\b(VV4A|Lurch)\b/i],
+        ['credits',   /\b(Credits?|Cr\.?)\b/i],
+        ['fp',        /\b(FP|Forschungs?punkte?)\b/i],
     ];
 
-    const result = {error: null, ships: [], fleet_counts: {}};
+    const result = {error: null, ships: [], debug: {}};
 
-    // Schiffsansicht suchen: verschiedene mögliche IDs/Klassen
-    const shipView = document.getElementById('view-ships')
-        || document.getElementById('view-shipyard')
-        || document.getElementById('view-fleet')
-        || document.getElementById('view-werft')
-        || document.querySelector('[id*="ship"][id*="view"]')
-        || document.querySelector('[id*="fleet"][id*="view"]');
-
-    if (!shipView) {
-        result.error = 'no_ship_view';
-        // Trotzdem Flotten-Daten aus anderen Quellen versuchen
+    // Schiffsansicht suchen — prüft sichtbare UND versteckte Views
+    const viewSelectors = [
+        '#view-ships', '#view-shipyard', '#view-werft', '#view-fleet',
+        '[id^="view-ship"]', '[id*="shipyard"]',
+    ];
+    let shipView = null;
+    for (const sel of viewSelectors) {
+        const el = document.querySelector(sel);
+        if (el) { shipView = el; break; }
     }
+    result.debug.view_id = shipView ? (shipView.id || 'found') : 'not_found';
+    result.debug.visible = shipView ? (shipView.style.display !== 'none') : false;
 
-    // Flotten-Anzeige nach aktuellen Schiffen durchsuchen (Anzahlen pro Typ)
-    // Schiffe haben oft einen data-type oder onclick="buildShip('type')" Attribut
-    const buildBtns = document.querySelectorAll(
-        "[onclick*='buildShip'],[onclick*='startShip'],[onclick*='build_ship'],[onclick*='Schiff']"
-    );
+    // Suchbereich: bevorzuge Ship-View, aber suche notfalls im ganzen Dokument
+    const root = shipView || document;
 
-    buildBtns.forEach(btn => {
-        const onclick = btn.getAttribute('onclick') || '';
-        // Typ aus onclick extrahieren: buildShip('scout') oder startShip("fighter")
-        const m = onclick.match(/(?:buildShip|startShip|build_ship)\(['"]([^'"]+)['"]\)/i);
-        if (!m) return;
-        const stype = m[1];
+    // ── Strategie 1: Buttons mit buildShip/startShip im onclick ────────
+    const seen = new Set();
 
-        const row = btn.closest('tr') || btn.closest('.ship-item') || btn.closest('li') || btn.parentElement;
+    // Alle onclick-Patterns die Schiffstypen enthalten
+    const btnSelectors = [
+        "[onclick*='buildShip']",
+        "[onclick*='startShip']",
+        "[onclick*='build_ship']",
+        "[onclick*='shipBuild']",
+        "[onclick*='werftBauen']",
+        "[data-ship-type]",
+        "[data-stype]",
+    ];
+
+    const allBtns = root.querySelectorAll(btnSelectors.join(','));
+    result.debug.btn_count = allBtns.length;
+
+    allBtns.forEach(btn => {
+        // Typ aus onclick oder data-Attribut
+        let stype = btn.getAttribute('data-ship-type') || btn.getAttribute('data-stype') || '';
+        if (!stype) {
+            const onclick = btn.getAttribute('onclick') || '';
+            // buildShip('scout'), buildShip("scout"), buildShip('scout', 1), buildShip(scout)
+            const m = onclick.match(
+                /(?:buildShip|startShip|build_ship|shipBuild|werftBauen)\s*\(\s*['"]?([A-Za-z0-9_-]+)['"]?/i
+            );
+            if (m) stype = m[1];
+        }
+        if (!stype || seen.has(stype)) return;
+        seen.add(stype);
+
+        // Zeile / Container des Buttons
+        const row = btn.closest('tr')
+            || btn.closest('.ship-item')
+            || btn.closest('.ship-row')
+            || btn.closest('.shipyard-item')
+            || btn.closest('li')
+            || btn.closest('[class*="ship"]')
+            || btn.parentElement;
         if (!row) return;
 
         const rowText = (row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim();
 
-        // Name: erstes strong/b oder erster Textblock
+        // Name: Klassen-Selektoren, dann strong/b, dann ersten Textblock
         let name = '';
-        const nameEl = row.querySelector('.ship-name, .sname, strong, b, td:first-child');
-        if (nameEl) name = (nameEl.innerText || nameEl.textContent || '').trim();
-        if (!name) name = rowText.split(/[:|·\d]/)[0].trim() || stype;
+        const nameEl = row.querySelector(
+            '.ship-name, .sname, .shipname, [class*="name"], td:first-child, th:first-child, strong, b, h3, h4'
+        );
+        if (nameEl) name = (nameEl.innerText || nameEl.textContent || '').trim().split('\n')[0].trim();
+        // Fallback: Text vor erstem Doppelpunkt / Zahl
+        if (!name || name.length > 80) name = rowText.split(/[:|\d]/)[0].trim().slice(0, 60);
+        if (!name) name = stype;
 
-        // Kosten
+        // Ressourcenkosten aus rowText
         const cost = {};
         const tokens = rowText.split(/\s+/);
         for (let i = 0; i < tokens.length; i++) {
@@ -372,34 +416,39 @@ _SHIP_VIEW_JS = r"""
             if (!/^[\d.,]+$/.test(t)) continue;
             const val = parseNumber(t);
             if (val <= 0) continue;
-            const next = (tokens[i+1] || '').replace(/[^A-Za-zäöüÄÖÜ]/g, '');
+            const nextWord = (tokens[i+1] || '') + ' ' + (tokens[i+2] || '');
             for (const [key, re] of costKeys) {
-                if (re.test(next)) { cost[key] = val; break; }
+                if (re.test(nextWord)) { cost[key] = val; break; }
             }
         }
 
         // Bauzeit
-        const timeRe = /(\d+h\s*\d+m\s*\d+s|\d+h\s*\d+m|\d+m\s*\d+s|\d+:\d{2}:\d{2}|\d+:\d{2}|\d+\s*min|\d+\s*s\b)/i;
+        const timeRe = /\b(\d+\s*[hH]\s*\d+\s*[mM](?:\s*\d+\s*[sS])?|\d+\s*[mM]\s*\d+\s*[sS]|\d+:\d{2}:\d{2}|\d+:\d{2}|\d+\s*[mM]in|\d+\s*[sS])\b/;
         const tm = rowText.match(timeRe);
-        const build_time_sec = tm ? parseTime(tm[1]) : 0;
+        const build_time_sec = tm ? parseTime(tm[0]) : 0;
 
-        // Aktuelle Anzahl in Flotte (oft als "(X)" oder "Bestand: X" angezeigt)
+        // Aktueller Flotten-Bestand
         let count = 0;
-        const countM = rowText.match(/(?:Bestand|Anzahl|Flotte|vorhanden)[:\s]*(\d+)/i)
-            || rowText.match(/\((\d+)\s*(?:vorhanden|in Flotte|Flotte)?\)/i);
-        if (countM) count = parseInt(countM[1]);
+        const countPat = rowText.match(/(?:Bestand|Anzahl|Flotte|vorhanden|Fleet|Count)[:\s]+(\d+)/i)
+            || rowText.match(/\((\d+)\s*(?:vorhanden|in\s*Flotte|in\s*Fleet)?\)/i);
+        if (countPat) count = parseInt(countPat[1]);
 
-        // Bauqueue-Anzahl (oft "im Bau: X")
+        // Bauqueue
         let in_queue = 0;
-        const queueM = rowText.match(/(?:im\s*Bau|Bauqueue|Queue|Bau)[:\s]*(\d+)/i);
-        if (queueM) in_queue = parseInt(queueM[1]);
+        const queuePat = rowText.match(/(?:im\s*Bau|Bauqueue|Queue|in\s*Bau|building)[:\s]+(\d+)/i);
+        if (queuePat) in_queue = parseInt(queuePat[1]);
 
-        const disabled = btn.disabled || btn.getAttribute('disabled') !== null
-            || (btn.className || '').includes('disabled');
+        // Deaktiviert?
+        const cls = (btn.className || '');
+        const disabled = btn.disabled
+            || btn.getAttribute('disabled') !== null
+            || cls.includes('disabled')
+            || cls.includes('inactive')
+            || cls.includes('locked');
 
         result.ships.push({
             type: stype,
-            name: name.slice(0, 80),
+            name: name,
             count,
             in_queue,
             can_build: !disabled,
@@ -407,6 +456,22 @@ _SHIP_VIEW_JS = r"""
             build_time_sec,
         });
     });
+
+    // ── Strategie 2: Tabellenzeilen mit data-type-Attribut (kein Button nötig) ──
+    if (result.ships.length === 0 && shipView) {
+        const dataRows = shipView.querySelectorAll('[data-type],[data-ship],[data-id]');
+        dataRows.forEach(row => {
+            const stype = row.getAttribute('data-type') || row.getAttribute('data-ship') || row.getAttribute('data-id');
+            if (!stype || seen.has(stype)) return;
+            // Nur aufnehmen wenn es nach einem Schiffstyp aussieht (keine Gebäude-IDs)
+            const rowText = (row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim();
+            if (!rowText) return;
+            seen.add(stype);
+            const nameEl = row.querySelector('[class*="name"], strong, b, td:first-child');
+            const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim().slice(0,60) : stype;
+            result.ships.push({type: stype, name, count: 0, in_queue: 0, can_build: true, build_cost: {}, build_time_sec: 0});
+        });
+    }
 
     return result;
 }
@@ -831,20 +896,85 @@ class GameScraper:
     async def get_fleet_from_dom(self) -> list[dict]:
         """Liest baubare Schiffe + aktuelle Flotte aus dem DOM.
 
-        Gibt eine Liste von Schiffs-Dicts zurück. Leer wenn kein Schiff-View
-        gefunden wird oder keine Schiffe verfügbar sind.
+        Öffnet die Schiffsansicht (Werft), liest alle Schiffs-Buttons via JS
+        und navigiert danach zurück zur Übersicht.
+        Gibt eine Liste von Schiffs-Dicts zurück.
         """
+        # Kandidaten-Views — wird der erste gefunden der DOM-Elemente enthält
+        _SHIP_VIEWS = [
+            ("showView('ships')",    "#view-ships"),
+            ("showView('shipyard')", "#view-shipyard"),
+            ("showView('werft')",    "#view-werft"),
+            ("showView('fleet')",    "#view-fleet"),
+        ]
+
+        opened_view = False
         try:
+            # Schiffsansicht öffnen — erste die eine sichtbare Werft zeigt
+            for js_cmd, selector in _SHIP_VIEWS:
+                try:
+                    await self._page.evaluate(js_cmd)
+                    await asyncio.sleep(0.6)
+                    # Prüfen ob mindestens ein buildShip-Button sichtbar ist
+                    has_buttons = await self._page.evaluate(
+                        "() => document.querySelectorAll(\"[onclick*='buildShip'],[onclick*='startShip']\").length > 0"
+                    )
+                    if has_buttons:
+                        logger.debug("Schiffsansicht geöffnet via: %s", js_cmd)
+                        opened_view = True
+                        break
+                    # View existiert aber keine Buttons — trotzdem für den JS-Lauf nutzen
+                    view_el = await self._page.query_selector(selector)
+                    if view_el:
+                        logger.debug("Schiffsansicht %s geöffnet (keine buildShip-Buttons)", selector)
+                        opened_view = True
+                        break
+                except Exception:
+                    continue
+
+            if not opened_view:
+                logger.debug("get_fleet_from_dom: keine Schiffsansicht gefunden — überspringe")
+                return []
+
+            # JS-Scraper ausführen (View ist jetzt offen)
             result = await self._page.evaluate(_SHIP_VIEW_JS)
             if not isinstance(result, dict):
+                logger.warning("fleet_from_dom: JS-Ergebnis kein Dict: %r", result)
                 return []
+
             ships = result.get("ships", [])
-            if ships:
-                logger.debug("fleet_from_dom: %d Schiffe gefunden", len(ships))
+            debug = result.get("debug", {})
+            logger.info(
+                "fleet_from_dom: %d Schiffe | view=%s visible=%s buttons=%s",
+                len(ships),
+                debug.get("view_id", "?"),
+                debug.get("visible", "?"),
+                debug.get("btn_count", "?"),
+            )
+            if not ships:
+                err = result.get("error", "")
+                logger.warning(
+                    "fleet_from_dom: Keine Schiffe gefunden. "
+                    "view_id=%s, visible=%s, btn_count=%s, error=%s",
+                    debug.get("view_id", "?"),
+                    debug.get("visible", "?"),
+                    debug.get("btn_count", "?"),
+                    err,
+                )
+
             return ships if isinstance(ships, list) else []
+
         except Exception as e:
             logger.debug("get_fleet_from_dom fehlgeschlagen: %s", e)
             return []
+        finally:
+            # Immer zurück zur Übersicht navigieren
+            if opened_view:
+                try:
+                    await self._page.evaluate("showView('overview')")
+                    await asyncio.sleep(0.3)
+                except Exception:
+                    pass
 
     async def snapshot(self, path: str | Path) -> None:
         """Speichert die aktuelle Seite als HTML für Offline-Analyse."""
