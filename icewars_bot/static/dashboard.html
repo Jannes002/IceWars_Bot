@@ -2145,6 +2145,14 @@ let _fleetData = null;      // zuletzt geladene Fleet-Daten
 let _unlockedShips = [];    // bekannte Schiffstypen
 let _shipTargets = {};      // aktuell eingestellte Ziele (in der UI)
 
+// Aktions-Wörter die kein richtiger Schiffsname sind (Scraper-Fallback)
+const _ACTION_WORDS = /^(Bauen|Build|Bau|Start|Starten|Kaufen|Buy|Ok|Bestätigen|Confirm|Weiter|Next)$/i;
+function shipDisplayName(ship) {
+  const n = (ship.name || '').trim();
+  if (!n || _ACTION_WORDS.test(n)) return ship.type;
+  return n;
+}
+
 async function loadFleet() {
   try {
     const [fleetResp, goalsResp] = await Promise.all([
@@ -2179,14 +2187,6 @@ function renderShipTargets(unlockedShips, targets) {
   if (allShips.length === 0) {
     container.innerHTML = '<div class="text-muted text-sm" style="padding:8px 0">Noch keine Schiffe entdeckt. Der Bot erkennt freigeschaltete Schiffe automatisch beim nächsten Planeten-Besuch.</div>';
     return;
-  }
-
-  // Aktions-Wörter die kein richtiger Schiffsname sind (Scraper-Fallback)
-  const _ACTION_WORDS = /^(Bauen|Build|Bau|Start|Starten|Kaufen|Buy|Ok|Bestätigen|Confirm|Weiter|Next)$/i;
-  function shipDisplayName(ship) {
-    const n = ship.name || '';
-    if (!n || _ACTION_WORDS.test(n.trim())) return ship.type;  // Typ als Fallback
-    return n;
   }
 
   const rows = allShips.map(ship => {
