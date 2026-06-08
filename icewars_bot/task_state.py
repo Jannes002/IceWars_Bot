@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .strategy import building_display_name
+from .building_names import building_display_name
 
 
 @dataclass
