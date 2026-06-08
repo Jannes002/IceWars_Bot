@@ -95,6 +95,15 @@ class BotTaskState:
     next_planet_switch_at: Optional[float] = None   # Unix-Timestamp frühestmöglicher Wechsel
     next_planet_target: str = ""                    # Name des Ziel-Planeten
 
+    # Flotten-Snapshots: city_id → Liste von {"type", "name", "count", "in_queue"}
+    # Wird nach jedem Planeten-Besuch aktualisiert.
+    fleet_snapshots: dict = field(default_factory=dict)
+
+    # Bekannte/freigeschaltete Schiffstypen (über alle Planeten hinweg gesammelt).
+    # Wird genutzt um im Dashboard die richtigen Schiffe anzuzeigen.
+    # Format: [{"type": str, "name": str}, ...]
+    unlocked_ships: list = field(default_factory=list)
+
     def to_dict(self) -> dict:
         return {
             "bot_status": self.bot_status,
@@ -411,3 +420,41 @@ def initialize_seen_research(rtypes: list) -> None:
     """
     with _lock:
         _state.seen_researched_types.update(rtypes)
+
+
+# ── Flotten-Tracking ──────────────────────────────────────────────────────────
+
+def set_fleet_snapshot(city_id: int, fleet: list) -> None:
+    """Speichert den Flotten-Snapshot einer Stadt (nach jedem Besuch aufrufen).
+
+    fleet: [{"type": str, "name": str, "count": int, "in_queue": int, ...}]
+    """
+    with _lock:
+        _state.fleet_snapshots[city_id] = list(fleet)
+
+
+def get_fleet_snapshots() -> dict:
+    """Gibt alle gespeicherten Flotten-Snapshots zurück (city_id → fleet_list)."""
+    with _lock:
+        return dict(_state.fleet_snapshots)
+
+
+def update_unlocked_ships(ships: list) -> None:
+    """Aktualisiert die Liste bekannter Schiffstypen (type+name).
+
+    Neue Einträge werden hinzugefügt, vorhandene (gleicher type) aktualisiert.
+    ships: [{"type": str, "name": str}, ...]
+    """
+    with _lock:
+        known: dict[str, dict] = {s["type"]: s for s in _state.unlocked_ships if s.get("type")}
+        for s in ships:
+            stype = s.get("type")
+            if stype:
+                known[stype] = {"type": stype, "name": s.get("name", stype)}
+        _state.unlocked_ships = list(known.values())
+
+
+def get_unlocked_ships() -> list:
+    """Gibt alle bekannten Schiffstypen zurück."""
+    with _lock:
+        return list(_state.unlocked_ships)

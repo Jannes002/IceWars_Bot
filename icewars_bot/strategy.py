@@ -8,6 +8,7 @@ from .config import Config
 from .state import BuildingInfo, Capacity, GameState, ResearchItem
 from . import goals as G
 from . import cooldown
+from . import task_state as ts
 
 logger = logging.getLogger(__name__)
 
@@ -598,9 +599,14 @@ class Strategy:
         free_slots = state.max_build_slots - len(state.build_queue)
 
         if free_slots > 0:
-            build_action = self._decide_build(state, priority_override=priority_override)
-            if build_action:
-                actions.append(build_action)
+            # Schiffsbau hat Priorität vor normalem Gebäudebau
+            ship_action = self._decide_ships(state)
+            if ship_action:
+                actions.append(ship_action)
+            else:
+                build_action = self._decide_build(state, priority_override=priority_override)
+                if build_action:
+                    actions.append(build_action)
         else:
             logger.info(
                 "Alle Bauslots belegt (%d/%d).",
@@ -617,6 +623,145 @@ class Strategy:
 
         logger.info("Geplante Aktionen: %s", [str(a) for a in actions])
         return actions
+
+    # ──────────────────────────────────────────────────────────────────────
+    #  Schiffsbau (Priorität vor Gebäudebau)
+    # ──────────────────────────────────────────────────────────────────────
+
+    # Werftgebäude-Typen — Schiffe können nur auf Planeten mit mindestens
+    # einer dieser Werften gebaut werden.
+    _SHIPYARD_TYPES: frozenset[str] = frozenset({
+        "launch_pad",
+        "shipyard_plan_small", "shipyard_plan_mid",
+        "shipyard_large",
+        "shipyard_orb_small", "shipyard_orb_mid",
+        "shipyard_dn",
+        "shipyard_complex",
+    })
+
+    def _has_shipyard(self, state: GameState) -> bool:
+        """True wenn dieser Planet mindestens eine Werft hat."""
+        return any(
+            b.count > 0 and b.type in self._SHIPYARD_TYPES
+            for b in state.buildings
+        )
+
+    def _decide_ships(self, state: GameState) -> Optional[Action]:
+        """Prüft ob ein Schiff gebaut werden soll.
+
+        Vergleicht die Schiffsbau-Ziele (G.ship_targets()) mit der bekannten
+        Gesamtflotte über alle Planeten (aus task_state.fleet_snapshots) plus
+        dem aktuell scrape-frischen Stand dieses Planeten.
+
+        Gibt eine ``build_ship``-Action zurück, wenn:
+        - es aktive Schiffsbau-Ziele gibt
+        - dieser Planet eine Werft hat
+        - ein Schiff-Typ ein Defizit (Ist+Queue < Ziel) hat
+        - das Schiff auf diesem Planeten baubar ist (can_build=True)
+        """
+        ship_targets = G.ship_targets()
+        if not ship_targets:
+            return None
+
+        if not self._has_shipyard(state):
+            logger.debug(
+                "Kein Schiffsbau: Planet %s hat keine Werft.",
+                state.coords or state.city_id,
+            )
+            return None
+
+        # Gesamtflotte über alle bekannten Planeten (fleet_snapshots + aktueller Planet)
+        fleet_snapshots = ts.get_fleet_snapshots()
+
+        # Aktueller Planet als Index aufbauen (frische Scrape-Daten)
+        current_fleet: dict[str, tuple[int, int]] = {}  # type → (count, in_queue)
+        for ship in state.fleet:
+            current_fleet[ship.type] = (ship.count, ship.in_queue)
+
+        # Gesamtzählung über alle Planeten
+        total_count: dict[str, int] = {}
+        total_queued: dict[str, int] = {}
+
+        for city_id, fleet_list in fleet_snapshots.items():
+            if city_id == state.city_id:
+                # Aktuelle Planet-Daten verwenden (frischer als Snapshot)
+                for stype, (cnt, queued) in current_fleet.items():
+                    total_count[stype] = total_count.get(stype, 0) + cnt
+                    total_queued[stype] = total_queued.get(stype, 0) + queued
+            else:
+                for ship in fleet_list:
+                    stype = ship.get("type", "")
+                    if not stype:
+                        continue
+                    total_count[stype] = total_count.get(stype, 0) + int(ship.get("count", 0))
+                    total_queued[stype] = total_queued.get(stype, 0) + int(ship.get("in_queue", 0))
+
+        # Wenn der aktuelle Planet noch nicht in fleet_snapshots ist
+        if state.city_id not in fleet_snapshots:
+            for stype, (cnt, queued) in current_fleet.items():
+                total_count[stype] = total_count.get(stype, 0) + cnt
+                total_queued[stype] = total_queued.get(stype, 0) + queued
+
+        # Index baubare Schiffe auf diesem Planeten
+        buildable: dict[str, "state.ShipInfo"] = {
+            s.type: s for s in state.fleet if s.can_build
+        }
+
+        # Schiff mit größtem relativem Defizit bevorzugen
+        best_ship = None
+        best_deficit_ratio = 0.0
+
+        for ship_type, target in ship_targets.items():
+            if target <= 0:
+                continue
+            current = total_count.get(ship_type, 0)
+            queued = total_queued.get(ship_type, 0)
+            total_have = current + queued
+
+            if total_have >= target:
+                logger.debug(
+                    "Schiffsziel %s: %d/%d — bereits erreicht.",
+                    ship_type, total_have, target,
+                )
+                continue
+
+            deficit = target - total_have
+            deficit_ratio = deficit / max(target, 1)
+
+            if ship_type not in buildable:
+                logger.debug(
+                    "Schiffsziel %s: Defizit %d — nicht baubar auf diesem Planeten.",
+                    ship_type, deficit,
+                )
+                continue
+
+            if deficit_ratio > best_deficit_ratio:
+                best_deficit_ratio = deficit_ratio
+                best_ship = buildable[ship_type]
+                best_deficit = deficit
+                best_target = target
+
+        if best_ship is None:
+            return None
+
+        logger.info(
+            "Schiffsbau: '%s' (Ziel=%d, Ist=%d+%d Queue, Defizit=%d, ratio=%.2f%%)",
+            best_ship.name,
+            best_target,
+            total_count.get(best_ship.type, 0),
+            total_queued.get(best_ship.type, 0),
+            best_deficit,
+            best_deficit_ratio * 100,
+        )
+        return Action("build_ship", {
+            "ship_type": best_ship.type,
+            "ship_name": best_ship.name,
+            "reason": (
+                f"Ziel: {best_target}, "
+                f"Ist: {total_count.get(best_ship.type, 0)}+"
+                f"{total_queued.get(best_ship.type, 0)} Queue"
+            ),
+        })
 
     # ──────────────────────────────────────────────────────────────────────
     #  Bau-Priorisierung

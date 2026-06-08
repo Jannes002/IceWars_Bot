@@ -42,6 +42,8 @@ class ActionExecutor:
                 return await self._build_next_building(action.params)
             elif action.type == "start_research":
                 return await self._start_research(action.params)
+            elif action.type == "build_ship":
+                return await self._build_ship(action.params)
             elif action.type == "donate_alliance":
                 return await self.donate_to_alliance(action.params.get("donations", {}))
             else:
@@ -192,6 +194,120 @@ class ActionExecutor:
 
         except Exception as e:
             logger.error("Gebäudebau: %s", type(e).__name__)
+            return False
+
+    # ------------------------------------------------------------------
+    # Schiffsbau
+    # ------------------------------------------------------------------
+
+    async def _build_ship(self, params: dict) -> bool:
+        """Baut ein Schiff in der Werft.
+
+        Öffnet die Schiffsansicht und klickt den Bau-Button für den
+        gewünschten Schiffstyp. Probiert verschiedene JS-Hooks.
+        """
+        ship_type = params.get("ship_type", "")
+        ship_name = params.get("ship_name", ship_type)
+        reason = params.get("reason", "")
+
+        if not ship_type:
+            logger.warning("Schiffsbau: kein ship_type angegeben.")
+            return False
+
+        try:
+            # Schiffsansicht öffnen — verschiedene mögliche JS-Hooks
+            opened = False
+            for view_cmd in [
+                "showView('ships')",
+                "showView('fleet')",
+                "showView('shipyard')",
+                "showView('werft')",
+                "showFleetView()",
+                "showShipView()",
+            ]:
+                try:
+                    await self._page.evaluate(view_cmd)
+                    await asyncio.sleep(0.5)
+                    # Prüfen ob der View sichtbar ist
+                    visible = await self._page.evaluate("""
+                        () => {
+                            const v = document.getElementById('view-ships')
+                                || document.getElementById('view-fleet')
+                                || document.getElementById('view-shipyard')
+                                || document.getElementById('view-werft');
+                            return v ? v.style.display !== 'none' : false;
+                        }
+                    """)
+                    if visible:
+                        opened = True
+                        logger.debug("Schiffsansicht geöffnet via: %s", view_cmd)
+                        break
+                except Exception:
+                    continue
+
+            if not opened:
+                # Fallback: direkte Button-Suche ohne View-Wechsel
+                logger.debug("Schiffsansicht nicht gefunden — suche Schiffs-Buttons direkt.")
+
+            await asyncio.sleep(0.5)
+
+            # Bau-Button für diesen Schiffstyp suchen
+            # Mögliche onclick-Muster: buildShip('type'), startShip("type"), etc.
+            btn = None
+            for pattern in [
+                f"button[onclick*=\"buildShip('{ship_type}')\"]",
+                f"button[onclick*='buildShip(\"{ship_type}\")']",
+                f"button[onclick*=\"startShip('{ship_type}')\"]",
+                f"button[onclick*='buildShip({ship_type})']",
+            ]:
+                try:
+                    btn = await self._page.query_selector(pattern)
+                    if btn:
+                        break
+                except Exception:
+                    continue
+
+            # Fallback: alle Schiffsbau-Buttons durchsuchen
+            if btn is None:
+                all_ship_btns = await self._page.query_selector_all(
+                    "[onclick*='buildShip'],[onclick*='startShip'],[onclick*='build_ship']"
+                )
+                for candidate in all_ship_btns:
+                    onclick = await candidate.get_attribute("onclick") or ""
+                    if ship_type in onclick:
+                        btn = candidate
+                        break
+
+            if btn is None:
+                logger.warning("Schiffsbau '%s': Button nicht gefunden.", ship_type)
+                return False
+
+            if await btn.is_disabled():
+                logger.warning(
+                    "Schiffsbau '%s': Button deaktiviert (Ressourcen/Voraussetzungen).",
+                    ship_type,
+                )
+                return False
+
+            await btn.click()
+            await asyncio.sleep(1)
+            logger.info("Schiff gebaut: '%s' — %s", ship_name, reason)
+
+            # Zurück zur Übersicht
+            try:
+                await self._page.evaluate("showView('overview')")
+                await asyncio.sleep(0.5)
+            except Exception:
+                pass
+
+            return True
+
+        except Exception as e:
+            logger.error("Schiffsbau '%s': %s", ship_type, type(e).__name__)
+            try:
+                await self._page.evaluate("showView('overview')")
+            except Exception:
+                pass
             return False
 
     # ------------------------------------------------------------------

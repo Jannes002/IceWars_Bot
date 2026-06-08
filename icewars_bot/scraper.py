@@ -289,6 +289,130 @@ _RESEARCH_ACTIVE_JS = """
 """
 
 
+# JavaScript: liest die Schiffsbau-Ansicht — alle baubaren Schiffe mit Kosten,
+# Bauzeit und aktuellem Bestand in der Flotte. Probiert mehrere UI-Container.
+_SHIP_VIEW_JS = r"""
+() => {
+    function parseNumber(s) {
+        if (!s) return 0;
+        const cleaned = String(s).replace(/[^\d.,-]/g, '').replace(/[.,](?=\d{3}\b)/g, '');
+        const n = parseFloat(cleaned.replace(',', '.'));
+        return isNaN(n) ? 0 : n;
+    }
+
+    function parseTime(text) {
+        if (!text) return 0;
+        let sec = 0;
+        const hms = text.match(/(\d+)\s*h\s*(\d+)\s*m(?:\s*(\d+)\s*s)?/i);
+        if (hms) return parseInt(hms[1])*3600 + parseInt(hms[2])*60 + parseInt(hms[3]||'0');
+        const ms = text.match(/(\d+)\s*m(?:in)?\s*(\d+)?\s*s?/i);
+        if (ms) return parseInt(ms[1])*60 + parseInt(ms[2]||'0');
+        const colon = text.match(/(\d+):(\d{2}):(\d{2})/);
+        if (colon) return parseInt(colon[1])*3600 + parseInt(colon[2])*60 + parseInt(colon[3]);
+        const onlySec = text.match(/(\d+)\s*s\b/i);
+        if (onlySec) return parseInt(onlySec[1]);
+        return 0;
+    }
+
+    const costKeys = [
+        ['iron',      /\bEisen\b/i],
+        ['steel',     /\bStahl\b/i],
+        ['chemicals', /\bChem/i],
+        ['ice',       /\bEis\b/i],
+        ['water',     /\bWasser\b/i],
+        ['energy',    /\bEnergie\b/i],
+        ['vv4a',      /\bVV4A\b/i],
+        ['credits',   /\bCredits?\b/i],
+    ];
+
+    const result = {error: null, ships: [], fleet_counts: {}};
+
+    // Schiffsansicht suchen: verschiedene mögliche IDs/Klassen
+    const shipView = document.getElementById('view-ships')
+        || document.getElementById('view-shipyard')
+        || document.getElementById('view-fleet')
+        || document.getElementById('view-werft')
+        || document.querySelector('[id*="ship"][id*="view"]')
+        || document.querySelector('[id*="fleet"][id*="view"]');
+
+    if (!shipView) {
+        result.error = 'no_ship_view';
+        // Trotzdem Flotten-Daten aus anderen Quellen versuchen
+    }
+
+    // Flotten-Anzeige nach aktuellen Schiffen durchsuchen (Anzahlen pro Typ)
+    // Schiffe haben oft einen data-type oder onclick="buildShip('type')" Attribut
+    const buildBtns = document.querySelectorAll(
+        "[onclick*='buildShip'],[onclick*='startShip'],[onclick*='build_ship'],[onclick*='Schiff']"
+    );
+
+    buildBtns.forEach(btn => {
+        const onclick = btn.getAttribute('onclick') || '';
+        // Typ aus onclick extrahieren: buildShip('scout') oder startShip("fighter")
+        const m = onclick.match(/(?:buildShip|startShip|build_ship)\(['"]([^'"]+)['"]\)/i);
+        if (!m) return;
+        const stype = m[1];
+
+        const row = btn.closest('tr') || btn.closest('.ship-item') || btn.closest('li') || btn.parentElement;
+        if (!row) return;
+
+        const rowText = (row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim();
+
+        // Name: erstes strong/b oder erster Textblock
+        let name = '';
+        const nameEl = row.querySelector('.ship-name, .sname, strong, b, td:first-child');
+        if (nameEl) name = (nameEl.innerText || nameEl.textContent || '').trim();
+        if (!name) name = rowText.split(/[:|·\d]/)[0].trim() || stype;
+
+        // Kosten
+        const cost = {};
+        const tokens = rowText.split(/\s+/);
+        for (let i = 0; i < tokens.length; i++) {
+            const t = tokens[i];
+            if (!/^[\d.,]+$/.test(t)) continue;
+            const val = parseNumber(t);
+            if (val <= 0) continue;
+            const next = (tokens[i+1] || '').replace(/[^A-Za-zäöüÄÖÜ]/g, '');
+            for (const [key, re] of costKeys) {
+                if (re.test(next)) { cost[key] = val; break; }
+            }
+        }
+
+        // Bauzeit
+        const timeRe = /(\d+h\s*\d+m\s*\d+s|\d+h\s*\d+m|\d+m\s*\d+s|\d+:\d{2}:\d{2}|\d+:\d{2}|\d+\s*min|\d+\s*s\b)/i;
+        const tm = rowText.match(timeRe);
+        const build_time_sec = tm ? parseTime(tm[1]) : 0;
+
+        // Aktuelle Anzahl in Flotte (oft als "(X)" oder "Bestand: X" angezeigt)
+        let count = 0;
+        const countM = rowText.match(/(?:Bestand|Anzahl|Flotte|vorhanden)[:\s]*(\d+)/i)
+            || rowText.match(/\((\d+)\s*(?:vorhanden|in Flotte|Flotte)?\)/i);
+        if (countM) count = parseInt(countM[1]);
+
+        // Bauqueue-Anzahl (oft "im Bau: X")
+        let in_queue = 0;
+        const queueM = rowText.match(/(?:im\s*Bau|Bauqueue|Queue|Bau)[:\s]*(\d+)/i);
+        if (queueM) in_queue = parseInt(queueM[1]);
+
+        const disabled = btn.disabled || btn.getAttribute('disabled') !== null
+            || (btn.className || '').includes('disabled');
+
+        result.ships.push({
+            type: stype,
+            name: name.slice(0, 80),
+            count,
+            in_queue,
+            can_build: !disabled,
+            build_cost: cost,
+            build_time_sec,
+        });
+    });
+
+    return result;
+}
+"""
+
+
 class GameScraper:
     """Ruft den Spielzustand über die Icewars REST-API ab."""
 
@@ -679,16 +803,20 @@ class GameScraper:
             if hs:
                 highscore[category] = hs
 
+        # Flotten-Daten: erst API, dann DOM-Fallback
+        fleet_dom = await self.get_fleet_from_dom()
+
         raw = {
             "city": city,
             "research": research,
             "active_research": active_research,
             "research_lab_busy": research_lab_busy,
             "highscore": highscore,
+            "fleet_dom": fleet_dom,
         }
 
         logger.info(
-            "Scraped: %s | Eisen=%.0f Stahl=%.0f Eis=%.0f FP=%.0f Labor=%s Punkte=%d",
+            "Scraped: %s | Eisen=%.0f Stahl=%.0f Eis=%.0f FP=%.0f Labor=%s Punkte=%d | Schiffe=%d",
             city.get("coords", "?"),
             city.get("resources", {}).get("iron", 0),
             city.get("resources", {}).get("steel", 0),
@@ -696,8 +824,27 @@ class GameScraper:
             city.get("fp", 0),
             "belegt" if research_lab_busy else "frei",
             city.get("points", 0),
+            len(fleet_dom),
         )
         return raw
+
+    async def get_fleet_from_dom(self) -> list[dict]:
+        """Liest baubare Schiffe + aktuelle Flotte aus dem DOM.
+
+        Gibt eine Liste von Schiffs-Dicts zurück. Leer wenn kein Schiff-View
+        gefunden wird oder keine Schiffe verfügbar sind.
+        """
+        try:
+            result = await self._page.evaluate(_SHIP_VIEW_JS)
+            if not isinstance(result, dict):
+                return []
+            ships = result.get("ships", [])
+            if ships:
+                logger.debug("fleet_from_dom: %d Schiffe gefunden", len(ships))
+            return ships if isinstance(ships, list) else []
+        except Exception as e:
+            logger.debug("get_fleet_from_dom fehlgeschlagen: %s", e)
+            return []
 
     async def snapshot(self, path: str | Path) -> None:
         """Speichert die aktuelle Seite als HTML für Offline-Analyse."""

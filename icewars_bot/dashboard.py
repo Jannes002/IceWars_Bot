@@ -328,6 +328,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/goals":
                 updated = G.update(data)
                 self._json_response(updated)
+            elif parsed.path == "/api/ship-targets":
+                # Schiffsbau-Ziele VOLLSTÄNDIG ersetzen: {"ship_type": count, ...}
+                # Werte mit count=0 werden entfernt; negative Werte ignoriert.
+                if not isinstance(data, dict):
+                    self._json_response({"error": "Dict erwartet"}, 400)
+                    return
+                targets = {}
+                for k, v in data.items():
+                    try:
+                        count = int(v)
+                        if count > 0:
+                            targets[str(k)] = count
+                    except (TypeError, ValueError):
+                        pass
+                # Vollständig ersetzen (nicht mergen) — direkt in goals schreiben
+                G.replace_ship_targets(targets)
+                logger.info("Schiffsziele gesetzt: %s", targets)
+                self._json_response({"ok": True, "ship_targets": targets})
             elif parsed.path == "/api/setup":
                 allowed = {"game_url", "username", "password",
                            "telegram_token", "telegram_chat_id",
@@ -484,6 +502,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 })
             elif path == "/api/planets":
                 self._json_response({"planets": planets_store.get_all()})
+            elif path == "/api/fleet":
+                # Flotten-Snapshots aller bekannten Planeten + Kolonie-Namen
+                fleet_data = ts.get_fleet_snapshots()
+                colonies = ts.get_colonies_snapshots()
+                result = []
+                for city_id_str, fleet_list in fleet_data.items():
+                    city_id = int(city_id_str) if isinstance(city_id_str, str) else city_id_str
+                    col = colonies.get(city_id, {})
+                    result.append({
+                        "city_id":   city_id,
+                        "city_name": col.get("city_name", ""),
+                        "coords":    col.get("coords", ""),
+                        "ships":     fleet_list,
+                    })
+                result.sort(key=lambda x: x["city_id"])
+                self._json_response({
+                    "fleet": result,
+                    "unlocked_ships": ts.get_unlocked_ships(),
+                })
             else:
                 self.send_error(404, "Not Found")
         except Exception as e:

@@ -598,6 +598,41 @@
     .info-item { display: flex; flex-direction: column; gap: 2px; }
     .info-label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
     .info-value { font-size: 0.9rem; font-weight: 600; }
+
+    /* ── Schiffe-Tab ─────────────────────────────────────────────────── */
+    .ship-targets-list { display: flex; flex-direction: column; gap: 10px; }
+    .ship-target-row {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 10px 12px;
+      background: var(--bg-elevated); border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .ship-name-label { flex: 1; font-weight: 500; color: var(--text); min-width: 120px; }
+    .ship-type-badge {
+      font-size: 0.72rem; color: var(--text-muted);
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 4px; padding: 2px 6px; font-family: monospace;
+    }
+    .ship-target-input {
+      width: 80px; text-align: right;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); color: var(--text);
+      padding: 4px 8px; font-size: 0.85rem;
+    }
+    .ship-target-input:focus { outline: none; border-color: var(--accent); }
+
+    .fleet-totals-list { display: flex; flex-direction: column; gap: 10px; }
+    .fleet-total-row {
+      padding: 10px 12px;
+      background: var(--bg-elevated); border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .fleet-total-name { font-weight: 500; color: var(--text); margin-bottom: 4px; }
+    .fleet-total-counts { margin-bottom: 4px; }
+    .fleet-progress-bar {
+      height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden;
+    }
+    .fleet-progress-fill { height: 100%; border-radius: 3px; transition: width .4s; }
   </style>
 </head>
 <body>
@@ -640,6 +675,9 @@
   </button>
   <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')">
     <span class="tab-icon">⚙️</span>Einstellungen
+  </button>
+  <button class="tab-btn" data-tab="ships" onclick="switchTab('ships')">
+    <span class="tab-icon">🚀</span>Schiffe
   </button>
 </nav>
 
@@ -1170,6 +1208,79 @@
     </div><!-- /stack -->
   </section><!-- /tab-settings -->
 
+  <!-- ══════════════════════════════════════════════════════
+       TAB: SCHIFFE
+  ══════════════════════════════════════════════════════════ -->
+  <section id="tab-ships" class="tab-pane">
+    <div class="stack section-gap">
+
+      <!-- Schiffsziele -->
+      <div class="card">
+        <div class="section-header collapsible open" onclick="toggleSection('ship-targets-body')">
+          <div>
+            <span class="section-title">🎯 Schiffsziele</span>
+            <span class="section-subtitle">Gewünschte Gesamtanzahl pro Schiffstyp (über alle Planeten)</span>
+          </div>
+          <span class="chevron">▼</span>
+        </div>
+        <div id="ship-targets-body" class="section-body">
+          <div id="ship-targets-container" style="padding:16px 0">
+            <div class="text-muted text-sm" style="padding:8px 0">Noch keine Schiffe entdeckt. Der Bot erkennt freigeschaltete Schiffe automatisch beim nächsten Planeten-Besuch.</div>
+          </div>
+          <div id="ship-manual-entry" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+            <div class="text-muted text-sm" style="margin-bottom:8px">Schiffstyp manuell hinzufügen (falls noch nicht automatisch erkannt):</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input type="text" id="ship-manual-type" class="setting-input" placeholder="Schiffstyp (z.B. scout)" style="width:180px">
+              <input type="text" id="ship-manual-name" class="setting-input" placeholder="Anzeigename (optional)" style="width:180px">
+              <input type="number" id="ship-manual-count" class="setting-input" min="0" placeholder="Anzahl" style="width:100px">
+              <button class="btn btn-ghost btn-sm" onclick="addManualShipTarget()">➕ Hinzufügen</button>
+            </div>
+          </div>
+          <div style="margin-top:16px;display:flex;gap:8px;align-items:center">
+            <button class="btn btn-primary" onclick="saveShipTargets()">💾 Ziele speichern</button>
+            <span class="text-muted text-sm">Ziel = 0 deaktiviert den Bau dieses Schiffstyps</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Flotten-Übersicht pro Planet -->
+      <div class="card">
+        <div class="section-header collapsible open" onclick="toggleSection('fleet-overview-body')">
+          <div>
+            <span class="section-title">🌍 Flotte nach Planeten</span>
+            <span class="section-subtitle">Aktuelle Flottenzusammensetzung je Kolonie</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button class="btn btn-sm btn-ghost" onclick="loadFleet();event.stopPropagation()">⟳</button>
+            <span class="chevron">▼</span>
+          </div>
+        </div>
+        <div id="fleet-overview-body" class="section-body">
+          <div id="fleet-overview-container" style="overflow-x:auto">
+            <div class="text-muted text-sm" style="padding:8px 0">Lade Flottendaten...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Gesamt-Flotte Zusammenfassung -->
+      <div class="card">
+        <div class="section-header collapsible open" onclick="toggleSection('fleet-total-body')">
+          <div>
+            <span class="section-title">📊 Gesamtflotte</span>
+            <span class="section-subtitle">Summe aller Schiffe über alle Planeten</span>
+          </div>
+          <span class="chevron">▼</span>
+        </div>
+        <div id="fleet-total-body" class="section-body">
+          <div id="fleet-total-container">
+            <div class="text-muted text-sm" style="padding:8px 0">Lade...</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section><!-- /tab-ships -->
+
 </main><!-- /app-content -->
 
 <script>
@@ -1222,6 +1333,7 @@ function switchTab(name) {
   if (name === 'log') { _logOffset = 0; loadLog(); }
   if (name === 'planets') loadPlanets();
   if (name === 'settings') loadSettings();
+  if (name === 'ships') loadFleet();
 }
 
 /* ── Toasts ────────────────────────────────────────────────────────── */
@@ -2028,6 +2140,213 @@ async function saveCredentials() {
   } catch(e) { toast('Fehler beim Speichern', 'error'); }
 }
 
+/* ── Ships / Fleet ─────────────────────────────────────────────────── */
+let _fleetData = null;      // zuletzt geladene Fleet-Daten
+let _unlockedShips = [];    // bekannte Schiffstypen
+let _shipTargets = {};      // aktuell eingestellte Ziele (in der UI)
+
+async function loadFleet() {
+  try {
+    const [fleetResp, goalsResp] = await Promise.all([
+      api('/api/fleet'),
+      api('/api/goals'),
+    ]);
+    _fleetData = fleetResp;
+    _unlockedShips = fleetResp.unlocked_ships || [];
+    _shipTargets = goalsResp.ship_targets || {};
+    renderShipTargets(_unlockedShips, _shipTargets);
+    renderFleetOverview(fleetResp.fleet || []);
+    renderFleetTotal(fleetResp.fleet || [], _unlockedShips, _shipTargets);
+  } catch(e) {
+    document.getElementById('ship-targets-container').innerHTML =
+      '<div class="text-muted text-sm" style="color:var(--red)">Fehler beim Laden: ' + esc(String(e)) + '</div>';
+  }
+}
+
+function renderShipTargets(unlockedShips, targets) {
+  const container = document.getElementById('ship-targets-container');
+
+  // Alle Schiffe zusammenführen: entdeckte + manuell konfigurierte
+  const knownTypes = new Set(unlockedShips.map(s => s.type));
+  // Auch Schiffe aus bestehenden Zielen anzeigen (auch wenn noch nicht entdeckt)
+  const allShips = [...unlockedShips];
+  for (const [stype, cnt] of Object.entries(targets)) {
+    if (!knownTypes.has(stype)) {
+      allShips.push({ type: stype, name: stype });
+    }
+  }
+
+  if (allShips.length === 0) {
+    container.innerHTML = '<div class="text-muted text-sm" style="padding:8px 0">Noch keine Schiffe entdeckt. Der Bot erkennt freigeschaltete Schiffe automatisch beim nächsten Planeten-Besuch.</div>';
+    return;
+  }
+
+  const rows = allShips.map(ship => {
+    const target = targets[ship.type] || 0;
+    return `<div class="ship-target-row">
+      <span class="ship-name-label">🚀 ${esc(ship.name || ship.type)}</span>
+      <span class="ship-type-badge">${esc(ship.type)}</span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input type="number" class="ship-target-input" id="ship-target-${esc(ship.type)}"
+               min="0" step="1" value="${target}" placeholder="0"
+               data-ship-type="${esc(ship.type)}" data-ship-name="${esc(ship.name || ship.type)}">
+        <span class="text-muted text-sm">Gesamt</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = `<div class="ship-targets-list">${rows}</div>`;
+}
+
+function renderFleetOverview(fleetPlanets) {
+  const container = document.getElementById('fleet-overview-container');
+
+  if (!fleetPlanets || fleetPlanets.length === 0) {
+    container.innerHTML = '<div class="text-muted text-sm" style="padding:8px 0">Noch keine Flottendaten verfügbar. Der Bot sammelt diese Informationen automatisch beim nächsten Planeten-Besuch.</div>';
+    return;
+  }
+
+  // Alle Schiffstypen über alle Planeten sammeln
+  const allTypes = new Set();
+  for (const planet of fleetPlanets) {
+    for (const ship of (planet.ships || [])) {
+      if (ship.type) allTypes.add(ship.type);
+    }
+  }
+
+  if (allTypes.size === 0) {
+    container.innerHTML = '<div class="text-muted text-sm" style="padding:8px 0">Keine Schiffe in der Flotte gefunden.</div>';
+    return;
+  }
+
+  const typeList = [...allTypes].sort();
+
+  // Tabelle: Zeilen = Planeten, Spalten = Schiffstypen
+  const header = `<tr>
+    <th style="text-align:left;padding:8px 12px;color:var(--text-muted);font-weight:500">Planet</th>
+    ${typeList.map(t => `<th style="padding:8px 10px;color:var(--text-muted);font-weight:500;text-align:right">🚀 ${esc(t)}</th>`).join('')}
+  </tr>`;
+
+  const rows = fleetPlanets.map(planet => {
+    const shipIndex = {};
+    for (const ship of (planet.ships || [])) {
+      if (ship.type) shipIndex[ship.type] = ship;
+    }
+    const cells = typeList.map(stype => {
+      const s = shipIndex[stype];
+      if (!s) return `<td style="text-align:right;padding:6px 10px;color:var(--text-dim)">—</td>`;
+      const hasQueue = s.in_queue > 0;
+      return `<td style="text-align:right;padding:6px 10px">
+        <span style="color:var(--text)">${s.count || 0}</span>
+        ${hasQueue ? `<span style="color:var(--amber);font-size:0.75rem;margin-left:4px">(+${s.in_queue} Bau)</span>` : ''}
+      </td>`;
+    }).join('');
+    const label = esc((planet.city_name || `Planet ${planet.city_id}`) + (planet.coords ? ` (${planet.coords})` : ''));
+    return `<tr>
+      <td style="padding:6px 12px;color:var(--text)">${label}</td>
+      ${cells}
+    </tr>`;
+  }).join('');
+
+  container.innerHTML = `<table style="width:100%;border-collapse:collapse">
+    <thead style="border-bottom:1px solid var(--border)">${header}</thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function renderFleetTotal(fleetPlanets, unlockedShips, targets) {
+  const container = document.getElementById('fleet-total-container');
+
+  // Summen berechnen
+  const totals = {};   // stype → { count, in_queue }
+  for (const planet of (fleetPlanets || [])) {
+    for (const ship of (planet.ships || [])) {
+      if (!ship.type) continue;
+      if (!totals[ship.type]) totals[ship.type] = { count: 0, in_queue: 0, name: ship.type };
+      totals[ship.type].count    += ship.count || 0;
+      totals[ship.type].in_queue += ship.in_queue || 0;
+    }
+  }
+
+  // Schiffsnamen aus unlocked_ships einsetzen
+  for (const s of (unlockedShips || [])) {
+    if (totals[s.type]) totals[s.type].name = s.name || s.type;
+    else if (targets[s.type] > 0) {
+      // Ziel gesetzt aber noch keine Schiffe → trotzdem anzeigen
+      totals[s.type] = { count: 0, in_queue: 0, name: s.name || s.type };
+    }
+  }
+  // Schiffsziele die nicht in unlocked_ships sind trotzdem anzeigen
+  for (const [stype, cnt] of Object.entries(targets)) {
+    if (!totals[stype]) totals[stype] = { count: 0, in_queue: 0, name: stype };
+  }
+
+  const types = Object.keys(totals).sort();
+  if (types.length === 0) {
+    container.innerHTML = '<div class="text-muted text-sm" style="padding:8px 0">Keine Flottendaten.</div>';
+    return;
+  }
+
+  const rows = types.map(stype => {
+    const t = totals[stype];
+    const target = targets[stype] || 0;
+    const total_have = t.count + t.in_queue;
+    const pct = target > 0 ? Math.min(100, Math.round(total_have / target * 100)) : null;
+    const barColor = pct === null ? 'var(--accent)' : pct >= 100 ? 'var(--green)' : pct >= 50 ? 'var(--amber)' : 'var(--red)';
+
+    return `<div class="fleet-total-row">
+      <div class="fleet-total-name">🚀 ${esc(t.name)}</div>
+      <div class="fleet-total-counts">
+        <span style="color:var(--text);font-weight:600">${t.count}</span>
+        ${t.in_queue > 0 ? `<span style="color:var(--amber);font-size:0.8rem"> +${t.in_queue} im Bau</span>` : ''}
+        ${target > 0 ? `<span class="text-muted text-sm"> / Ziel: ${target}</span>` : ''}
+      </div>
+      ${target > 0 ? `<div class="fleet-progress-bar">
+        <div class="fleet-progress-fill" style="width:${pct}%;background:${barColor}"></div>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+
+  container.innerHTML = `<div class="fleet-totals-list">${rows}</div>`;
+}
+
+async function saveShipTargets() {
+  const inputs = document.querySelectorAll('.ship-target-input');
+  const targets = {};
+  for (const input of inputs) {
+    const stype = input.dataset.shipType;
+    const val = parseInt(input.value) || 0;
+    if (stype) targets[stype] = val;
+  }
+  try {
+    const result = await api('/api/ship-targets', 'POST', targets);
+    _shipTargets = result.ship_targets || targets;
+    toast('Schiffsziele gespeichert');
+    // Flotten-Gesamt-Anzeige aktualisieren
+    if (_fleetData) renderFleetTotal(_fleetData.fleet || [], _unlockedShips, _shipTargets);
+  } catch(e) { toast('Fehler beim Speichern', 'error'); }
+}
+
+function addManualShipTarget() {
+  const typeInput = document.getElementById('ship-manual-type');
+  const nameInput = document.getElementById('ship-manual-name');
+  const countInput = document.getElementById('ship-manual-count');
+  const stype = (typeInput.value || '').trim();
+  const sname = (nameInput.value || '').trim() || stype;
+  const count = parseInt(countInput.value) || 0;
+  if (!stype) { toast('Schiffstyp eingeben', 'error'); return; }
+  // Zu unlocked_ships hinzufügen falls noch nicht vorhanden
+  if (!_unlockedShips.find(s => s.type === stype)) {
+    _unlockedShips.push({ type: stype, name: sname });
+  }
+  _shipTargets[stype] = count;
+  renderShipTargets(_unlockedShips, _shipTargets);
+  typeInput.value = '';
+  nameInput.value = '';
+  countInput.value = '';
+  toast('Schiff hinzugefügt – mit Speichern übernehmen');
+}
+
 /* ── Central tick ──────────────────────────────────────────────────── */
 let _tickCount = 0;
 
@@ -2059,6 +2378,8 @@ async function tick() {
       _logOffset = 0;
       loadLog(false);
     }
+  } else if (tab === 'ships') {
+    if (_tickCount % 4 === 0) loadFleet();
   }
 
   if (_tickCount % 8 === 0) refreshRank();

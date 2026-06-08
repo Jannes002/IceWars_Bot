@@ -47,6 +47,9 @@ def _action_to_task(action: Action) -> ts.TaskEntry:
     elif action.type == "start_research":
         label = f"Forschen: {p.get('name', p.get('research_type', '?'))}"
         reason = ""
+    elif action.type == "build_ship":
+        label = f"Schiff bauen: {p.get('ship_name', p.get('ship_type', '?'))}"
+        reason = p.get("reason", "")
     else:
         label = action.type
         reason = ""
@@ -575,6 +578,10 @@ class BotLoop:
                 rtype = p.get("research_type", "")
                 name  = p.get("name", rtype)
                 record_build_event("research", rtype, name)
+            elif action.type == "build_ship":
+                stype = p.get("ship_type", "")
+                name  = p.get("ship_name", stype)
+                record_build_event("ship", stype, name)
         except Exception as e:
             logger.debug("DB-BuildEvent: %s", type(e).__name__)
 
@@ -1315,6 +1322,26 @@ class BotLoop:
             self._update_planet_list(state.city_id, state.colonies)
             ts.set_colony_snapshot(state.city_id, self._build_colony_snapshot(state))
             ts.set_current_city_id(state.city_id)
+
+            # Flotten-Snapshot aktualisieren (für planetenübergreifende Schiffszählung)
+            fleet_snapshot = [
+                {
+                    "type":      s.type,
+                    "name":      s.name,
+                    "count":     s.count,
+                    "in_queue":  s.in_queue,
+                    "can_build": s.can_build,
+                }
+                for s in state.fleet
+            ]
+            ts.set_fleet_snapshot(state.city_id, fleet_snapshot)
+            # Bekannte Schiffstypen sammeln (für Dashboard-Anzeige)
+            if state.fleet:
+                ts.update_unlocked_ships([
+                    {"type": s.type, "name": s.name}
+                    for s in state.fleet
+                    if s.type and s.name
+                ])
 
             # Build-Tracking: wann wird der letzte Bauplatz dieser Stadt frei?
             # 0 = Queue ist leer (Platz sofort frei), >0 = Unix-Timestamp

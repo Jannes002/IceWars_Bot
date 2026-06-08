@@ -119,6 +119,19 @@ class ResearchItem:
 
 
 @dataclass
+class ShipInfo:
+    """Ein Schiffstyp – entweder in der Flotte oder baubar."""
+    type: str
+    name: str
+    count: int = 0                              # Aktuell in der Flotte
+    in_queue: int = 0                           # Gerade in der Bauqueue
+    can_build: bool = False                     # Ressourcen + Voraussetzungen OK?
+    build_cost: dict[str, float] = field(default_factory=dict)
+    build_time_sec: int = 0
+    shipyard_required: str = ""                 # Benötigter Werfttyp (falls bekannt)
+
+
+@dataclass
 class GameState:
     city_id: int = 0
     city_name: str = ""
@@ -159,6 +172,10 @@ class GameState:
     # Bunker-Kapazität pro Ressource (aus city.bunker API-Feld)
     # Keys: "iron", "steel", "chemicals", "ice", "water", "energy", "vv4a", "pop"
     bunker_capacity: dict = field(default_factory=dict)
+
+    # Flotte: alle Schiffstypen die gebaut werden können oder schon in der Flotte sind.
+    # Wird aus city.ships / city.fleet oder per DOM-Scraping befüllt.
+    fleet: list[ShipInfo] = field(default_factory=list)
 
     @property
     def free_pop_ratio(self) -> float:
@@ -293,6 +310,70 @@ def parse_state(raw: dict[str, Any]) -> GameState:
             elif isinstance(val, dict):
                 bunker_capacity[res] = float(val.get("capacity", val.get("cap", 0)))
 
+    # Flotte / baubare Schiffe — verschiedene API-Formate werden unterstützt:
+    # city.ships, city.fleet, city.squadron — je nach Spielversion.
+    fleet: list[ShipInfo] = []
+    raw_ships = city.get("ships") or city.get("fleet") or city.get("squadron") or []
+    if isinstance(raw_ships, list):
+        for s in raw_ships:
+            if not isinstance(s, dict) or not s.get("type"):
+                continue
+            fleet.append(ShipInfo(
+                type=str(s.get("type", "")),
+                name=str(s.get("name", s.get("type", ""))),
+                count=int(s.get("count", s.get("amount", 0))),
+                in_queue=int(s.get("in_queue", s.get("queue_count", s.get("building", 0)))),
+                can_build=bool(s.get("can_build", s.get("can_afford", False))),
+                build_cost={
+                    k: float(v)
+                    for k, v in (s.get("build_cost") or s.get("cost") or {}).items()
+                    if isinstance(v, (int, float))
+                },
+                build_time_sec=int(s.get("build_time_sec", s.get("build_time", s.get("time_sec", 0)))),
+                shipyard_required=str(s.get("shipyard_required", s.get("requires_shipyard", ""))),
+            ))
+
+    # Ergänzung: DOM-gescrapte Flotten-/Schiffsdaten (aus dem raw-Dict des Scrapers)
+    dom_fleet = raw.get("fleet_dom") or []
+    dom_types = {s.type for s in fleet}
+    for s in dom_fleet:
+        if not isinstance(s, dict) or not s.get("type"):
+            continue
+        stype = str(s["type"])
+        if stype in dom_types:
+            # Vorhandene Einträge mit DOM-Daten anreichern (DOM ist oft aktueller)
+            for existing in fleet:
+                if existing.type == stype:
+                    if s.get("count") is not None:
+                        existing.count = int(s["count"])
+                    if s.get("in_queue") is not None:
+                        existing.in_queue = int(s["in_queue"])
+                    if s.get("can_build") is not None:
+                        existing.can_build = bool(s["can_build"])
+                    if s.get("build_cost"):
+                        existing.build_cost = {
+                            k: float(v) for k, v in s["build_cost"].items()
+                            if isinstance(v, (int, float))
+                        }
+                    if s.get("build_time_sec"):
+                        existing.build_time_sec = int(s["build_time_sec"])
+                    break
+        else:
+            fleet.append(ShipInfo(
+                type=stype,
+                name=str(s.get("name", stype)),
+                count=int(s.get("count", 0)),
+                in_queue=int(s.get("in_queue", 0)),
+                can_build=bool(s.get("can_build", False)),
+                build_cost={
+                    k: float(v)
+                    for k, v in (s.get("build_cost") or {}).items()
+                    if isinstance(v, (int, float))
+                },
+                build_time_sec=int(s.get("build_time_sec", 0)),
+                shipyard_required=str(s.get("shipyard_required", "")),
+            ))
+
     return GameState(
         city_id=int(city.get("id", 0)),
         city_name=str(city.get("name", "")),
@@ -320,4 +401,5 @@ def parse_state(raw: dict[str, Any]) -> GameState:
         raw=raw,
         colonies=colonies,
         bunker_capacity=bunker_capacity,
+        fleet=fleet,
     )

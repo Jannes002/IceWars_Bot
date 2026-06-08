@@ -98,6 +98,11 @@ DEFAULTS: dict[str, Any] = {
         "credits":   0.0,
         "fp":        0.0,
     },
+
+    # Schiffsbau-Ziele: Schiffstyp → gewünschte Gesamtanzahl über alle Planeten.
+    # Leeres Dict = Schiffsbau deaktiviert.
+    # Beispiel: {"scout": 10, "light_fighter": 5}
+    "ship_targets": {},
 }
 
 _lock = threading.RLock()
@@ -117,6 +122,7 @@ def _load_from_disk() -> dict[str, Any]:
         merged["resource_targets"]  = {**DEFAULTS["resource_targets"],  **stored.get("resource_targets",  {})}
         merged["bunker_thresholds"] = {**DEFAULTS["bunker_thresholds"], **stored.get("bunker_thresholds", {})}
         merged["donate_min_amounts"] = {**DEFAULTS["donate_min_amounts"], **stored.get("donate_min_amounts", {})}
+        merged["ship_targets"] = {**DEFAULTS.get("ship_targets", {}), **stored.get("ship_targets", {})}
         return merged
     except Exception as e:
         logger.error("goals.json Ladefehler: %s — nutze Defaults.", e)
@@ -163,6 +169,11 @@ def update(patch: dict[str, Any]) -> dict[str, Any]:
         if "donate_min_amounts" in patch and isinstance(patch["donate_min_amounts"], dict):
             _goals["donate_min_amounts"].update(patch["donate_min_amounts"])
             patch = {k: v for k, v in patch.items() if k != "donate_min_amounts"}
+        if "ship_targets" in patch and isinstance(patch["ship_targets"], dict):
+            if "ship_targets" not in _goals or not isinstance(_goals["ship_targets"], dict):
+                _goals["ship_targets"] = {}
+            _goals["ship_targets"].update(patch["ship_targets"])
+            patch = {k: v for k, v in patch.items() if k != "ship_targets"}
         _goals.update(patch)
         _save_to_disk(_goals)
         logger.info("Ziele aktualisiert und gespeichert.")
@@ -253,3 +264,29 @@ def donate_min_amounts() -> dict[str, float]:
             if k in result:
                 result[k] = float(v)
     return result
+
+
+def ship_targets() -> dict[str, int]:
+    """Gibt die Schiffsbau-Ziele zurück (Schiffstyp → gewünschte Anzahl).
+    Nur Einträge mit Wert > 0 werden zurückgegeben.
+    """
+    raw = get().get("ship_targets", DEFAULTS.get("ship_targets", {}))
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): int(v) for k, v in raw.items() if isinstance(v, (int, float)) and int(v) > 0}
+
+
+def replace_ship_targets(targets: dict[str, int]) -> dict[str, Any]:
+    """Ersetzt die Schiffsbau-Ziele vollständig (kein Merge).
+
+    Im Gegensatz zu ``update({"ship_targets": ...})`` werden hier alle
+    vorhandenen Ziele durch die neue Liste ersetzt. Einträge mit Wert 0
+    werden entfernt.
+    """
+    with _lock:
+        _ensure_loaded()
+        cleaned = {str(k): int(v) for k, v in targets.items() if isinstance(v, (int, float)) and int(v) > 0}
+        _goals["ship_targets"] = cleaned
+        _save_to_disk(_goals)
+        logger.info("Schiffsziele vollständig ersetzt: %s", cleaned)
+        return json.loads(json.dumps(_goals))
